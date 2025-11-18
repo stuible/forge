@@ -277,6 +277,10 @@ public class DeckTester {
     private MatchupResult runMatchup(Deck deck1, Deck deck2, int numGames) {
         MatchupResult result = new MatchupResult(deck1.getName(), deck2.getName());
 
+        // Set number of players (1 input deck + opponents)
+        boolean isCommander = isCommanderDeck(deck1) || isCommanderDeck(deck2);
+        result.numPlayers = isCommander ? commanderOpponents + 1 : 2;
+
         for (int i = 0; i < numGames && !cancelled; i++) {
             try {
                 GameOutcome outcome = playGame(deck1, deck2);
@@ -537,8 +541,10 @@ public class DeckTester {
                             }
                             display.append("\n");
 
-                            display.append(String.format("    Turn:   %3d  |  Phase: %-28s\n",
-                                state.turn, state.phase));
+                            // Calculate round number (each round = all players take a turn)
+                            int roundNum = state.numPlayers > 0 ? (state.turn + state.numPlayers - 1) / state.numPlayers : state.turn;
+                            display.append(String.format("    Round:  %3d  |  Phase: %-28s\n",
+                                roundNum, state.phase));
 
                             // Display all player life totals with active player highlighted
                             display.append("    Players: ");
@@ -668,6 +674,7 @@ public class DeckTester {
         public int draws = 0;
         public int errors = 0;
         public long totalTurns = 0;
+        public int numPlayers = 2; // Track number of players for round calculation
 
         public MatchupResult(String deckName, String opponentName) {
             this.deckName = deckName;
@@ -686,6 +693,13 @@ public class DeckTester {
         public double getAverageTurns() {
             int total = getTotalGames();
             return total > 0 ? (double) totalTurns / total : 0.0;
+        }
+
+        public double getAverageRounds() {
+            int total = getTotalGames();
+            if (total == 0) return 0.0;
+            double avgTurns = (double) totalTurns / total;
+            return numPlayers > 0 ? avgTurns / numPlayers : avgTurns;
         }
     }
 

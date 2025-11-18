@@ -334,37 +334,37 @@ public class DeckTesterCLI {
         // Best matchups
         System.out.println("BEST MATCHUPS (Top 10)");
         System.out.println("-".repeat(80));
-        System.out.printf("%-40s %12s %10s %10s%n", "Opponent", "W-L-D-E", "Win Rate", "Avg Turns");
+        System.out.printf("%-40s %12s %10s %11s%n", "Opponent", "W-L-D-E", "Win Rate", "Avg Rounds");
         System.out.println("-".repeat(80));
 
         List<MatchupResult> bestMatchups = results.getBestMatchups(10);
         for (MatchupResult matchup : bestMatchups) {
-            System.out.printf("%-40s %3d-%3d-%2d-%2d  %9.1f%%  %9.1f%n",
+            System.out.printf("%-40s %3d-%3d-%2d-%2d  %9.1f%%  %10.1f%n",
                     truncate(matchup.opponentName, 40),
                     matchup.wins,
                     matchup.losses,
                     matchup.draws,
                     matchup.errors,
                     matchup.getWinRate() * 100,
-                    matchup.getAverageTurns());
+                    matchup.getAverageRounds());
         }
 
         // Worst matchups
         System.out.println("\nWORST MATCHUPS (Bottom 10)");
         System.out.println("-".repeat(80));
-        System.out.printf("%-40s %12s %10s %10s%n", "Opponent", "W-L-D-E", "Win Rate", "Avg Turns");
+        System.out.printf("%-40s %12s %10s %11s%n", "Opponent", "W-L-D-E", "Win Rate", "Avg Rounds");
         System.out.println("-".repeat(80));
 
         List<MatchupResult> worstMatchups = results.getWorstMatchups(10);
         for (MatchupResult matchup : worstMatchups) {
-            System.out.printf("%-40s %3d-%3d-%2d-%2d  %9.1f%%  %9.1f%n",
+            System.out.printf("%-40s %3d-%3d-%2d-%2d  %9.1f%%  %10.1f%n",
                     truncate(matchup.opponentName, 40),
                     matchup.wins,
                     matchup.losses,
                     matchup.draws,
                     matchup.errors,
                     matchup.getWinRate() * 100,
-                    matchup.getAverageTurns());
+                    matchup.getAverageRounds());
         }
 
         // Performance metrics
