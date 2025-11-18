@@ -29,7 +29,7 @@ public class MTGGoldfishScraper {
     private static final String USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
     private static final String CACHE_INFO_FILE = ".cache_info.txt";
     private static final int CACHE_EXPIRY_DAYS = 7; // Cache expires after 7 days
-    private static final String DEFAULT_CACHE_DIR = ".cache/mtggoldfish_decks";
+    public static final String DEFAULT_CACHE_DIR = ".cache/mtggoldfish_decks";
 
     private final Path outputDir;
     private final Path cacheInfoPath;

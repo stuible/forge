@@ -104,12 +104,8 @@ public class DeckTesterCLI {
         tester.initialize();
 
         if (options.downloadDecks) {
-            // Create temp directory for downloaded decks
-            String deckDir = options.deckDirectory != null
-                    ? options.deckDirectory
-                    : "./mtggoldfish_decks";
-
-            MTGGoldfishScraper scraper = new MTGGoldfishScraper(deckDir);
+            // Use default cache directory (.cache/mtggoldfish_decks)
+            MTGGoldfishScraper scraper = new MTGGoldfishScraper();
 
             // Handle cache clearing
             if (options.clearCache) {
@@ -126,8 +122,8 @@ public class DeckTesterCLI {
 
             System.out.println();
 
-            // Load downloaded decks
-            return tester.loadDecksFromDirectory(deckDir);
+            // Load downloaded decks from cache directory
+            return tester.loadDecksFromDirectory(MTGGoldfishScraper.DEFAULT_CACHE_DIR);
 
         } else if (options.deckDirectory != null) {
             System.out.println("Loading decks from: " + options.deckDirectory);
