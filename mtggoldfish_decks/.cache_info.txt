@@ -1,0 +1,7 @@
+# MTGGoldfish Deck Cache
+# Generated: 2025-11-18T09:43:09.923238Z
+# Format: name|url|filepath
+
+Dimir Midrange|/archetype/standard-dimir-midrange-woe#online|./mtggoldfish_decks/dimir_midrange.dck
+Dimir Midrange|/archetype/standard-dimir-midrange-woe#paper|./mtggoldfish_decks/dimir_midrange.dck
+Jeskai Control|/archetype/standard-jeskai-control-woe#online|./mtggoldfish_decks/jeskai_control.dck

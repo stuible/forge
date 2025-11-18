@@ -1,0 +1,25 @@
+[metadata]
+Name=Mono Red Aggro Example
+Format=Standard
+
+[Main]
+4 Monastery Swiftspear
+4 Kumano Faces Kakkazan
+4 Bloodthirsty Adversary
+4 Phoenix Chick
+4 Reinforced Ronin
+3 Chandra, Dressed to Kill
+4 Play with Fire
+4 Lightning Strike
+4 Strangle
+2 Reckless Impulse
+3 Mishra's Foundry
+20 Mountain
+
+[Sideboard]
+2 Abrade
+2 Unlicensed Hearse
+3 Rending Flame
+2 Fable of the Mirror-Breaker
+3 Brotherhood's End
+3 Invasion of Regatha
