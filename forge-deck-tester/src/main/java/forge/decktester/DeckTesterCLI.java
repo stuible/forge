@@ -47,6 +47,44 @@ public class DeckTesterCLI {
     private static void runDeckTesting(Options options) throws Exception {
         printBanner();
 
+        // Suppress stderr and filter stdout unless verbose mode is enabled
+        PrintStream originalErr = System.err;
+        PrintStream originalOut = System.out;
+
+        if (!options.verbose) {
+            // Suppress all stderr
+            System.setErr(new PrintStream(new OutputStream() {
+                @Override
+                public void write(int b) {
+                    // Discard all output
+                }
+            }));
+
+            // Filter stdout to remove Forge debug messages
+            System.setOut(new PrintStream(new OutputStream() {
+                private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+
+                @Override
+                public void write(int b) throws IOException {
+                    if (b == '\n') {
+                        String line = buffer.toString();
+                        // Only print if it's not a Forge debug message
+                        if (!isForgeDebugMessage(line)) {
+                            originalOut.println(line);
+                        }
+                        buffer.reset();
+                    } else {
+                        buffer.write(b);
+                    }
+                }
+
+                @Override
+                public void flush() throws IOException {
+                    originalOut.flush();
+                }
+            }));
+        }
+
         DeckTester tester = new DeckTester();
 
         try {
@@ -64,8 +102,17 @@ public class DeckTesterCLI {
             int cardCount = isCommander ? testDeck.getAllCardsInASinglePool().countAll() : testDeck.getMain().countAll();
             String format = isCommander ? "Commander" : "Standard";
 
-            System.out.printf("Test deck loaded: %s (%d cards, %s format)%n%n",
+            // Validate deck legality
+            validateDeck(testDeck, isCommander);
+
+            System.out.printf("Test deck loaded: %s (%d cards, %s format)%n",
                     testDeck.getName(), cardCount, format);
+
+            if (isCommander && options.commanderOpponents > 1) {
+                System.out.printf("Commander mode: Playing against %d opponents (%d total players)%n",
+                        options.commanderOpponents, options.commanderOpponents + 1);
+            }
+            System.out.println();
 
             // Step 3: Get or download opponent decks (using detected format)
             List<Deck> opponentDecks = getOpponentDecks(tester, options, isCommander);
@@ -79,11 +126,20 @@ public class DeckTesterCLI {
 
             // Step 4: Run tests
             System.out.println("AI Profile: " + options.aiProfile);
+            if (options.showLiveProgress) {
+                System.out.println("Live Progress: Enabled");
+            }
             System.out.println();
 
             long startTime = System.currentTimeMillis();
 
             tester.setAiProfile(options.aiProfile);
+            tester.setShowLiveProgress(options.showLiveProgress);
+            tester.setCommanderOpponents(options.commanderOpponents);
+            // Pass original stdout for live display (bypasses filtering)
+            if (options.showLiveProgress) {
+                tester.setDirectOutputStream(originalOut);
+            }
             Map<String, MatchupResult> results = tester.testDeck(
                     testDeck,
                     opponentDecks,
@@ -104,7 +160,74 @@ public class DeckTesterCLI {
 
         } finally {
             tester.shutdown();
+            // Restore stderr and stdout
+            if (!options.verbose) {
+                System.setErr(originalErr);
+                System.setOut(originalOut);
+            }
         }
+    }
+
+    /**
+     * Sanitize filename for deck caching.
+     */
+    private static String sanitizeFilename(String name) {
+        return name.replaceAll("[^a-zA-Z0-9_\\-\\s]", "")
+                   .replaceAll("\\s+", "_");
+    }
+
+    /**
+     * Validate deck legality for the detected format.
+     */
+    private static void validateDeck(Deck deck, boolean isCommander) {
+        if (isCommander) {
+            // Commander deck validation
+            int totalCards = deck.getAllCardsInASinglePool().countAll();
+            if (totalCards != 100) {
+                System.err.println("WARNING: Commander deck should have exactly 100 cards, found " + totalCards);
+            }
+
+            if (!deck.has(forge.deck.DeckSection.Commander)) {
+                System.err.println("WARNING: Deck does not have a Commander section");
+            } else if (deck.get(forge.deck.DeckSection.Commander).countAll() == 0) {
+                System.err.println("WARNING: Commander section is empty");
+            }
+        } else {
+            // Standard deck validation
+            int mainDeckSize = deck.getMain().countAll();
+            if (mainDeckSize < 60) {
+                System.err.println("WARNING: Standard deck should have at least 60 cards in main deck, found " + mainDeckSize);
+            }
+
+            // Check for more than 4 copies of any card (except basic lands)
+            Map<String, Integer> cardCounts = new HashMap<>();
+            for (forge.item.PaperCard card : deck.getMain().toFlatList()) {
+                String cardName = card.getName();
+                if (!card.getRules().getType().isBasicLand()) {
+                    cardCounts.put(cardName, cardCounts.getOrDefault(cardName, 0) + 1);
+                    if (cardCounts.get(cardName) > 4) {
+                        System.err.println("WARNING: More than 4 copies of non-basic land: " + cardName + " (" + cardCounts.get(cardName) + " copies)");
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Check if a line is a Forge internal debug message that should be filtered.
+     */
+    private static boolean isForgeDebugMessage(String line) {
+        if (line == null) {
+            return false;
+        }
+
+        // Filter common Forge debug messages
+        return line.contains("Did not have activator set") ||
+               line.contains("SpellAbilityRestriction.canPlay()") ||
+               line.contains("Overriding AI confirmAction") ||
+               line.contains("Couldn't add to stack") ||
+               line.contains("default (ie. inherited from base class) implementation") ||
+               line.contains("Consider declaring an overloaded method");
     }
 
     /**
@@ -138,8 +261,21 @@ public class DeckTesterCLI {
 
             System.out.println();
 
-            // Load downloaded decks from cache directory
-            return tester.loadDecksFromDirectory(cacheDir);
+            // Load only the specific decks that were fetched (by name)
+            List<Deck> decks = new ArrayList<>();
+            for (DeckInfo deckInfo : deckInfos) {
+                String filename = sanitizeFilename(deckInfo.name) + ".dck";
+                File deckFile = new File(cacheDir, filename);
+                if (deckFile.exists()) {
+                    try {
+                        Deck deck = tester.loadDeck(deckFile.getAbsolutePath());
+                        decks.add(deck);
+                    } catch (Exception e) {
+                        System.err.println("Failed to load deck: " + deckInfo.name);
+                    }
+                }
+            }
+            return decks;
 
         } else if (options.deckDirectory != null) {
             System.out.println("Loading decks from: " + options.deckDirectory);
@@ -352,6 +488,25 @@ public class DeckTesterCLI {
                     options.aiProfile = profile;
                     break;
 
+                case "--live":
+                    options.showLiveProgress = true;
+                    break;
+
+                case "--verbose":
+                    options.verbose = true;
+                    break;
+
+                case "--commander-opponents":
+                    if (i + 1 >= args.length) {
+                        throw new IllegalArgumentException("Missing number after " + arg);
+                    }
+                    int opponents = Integer.parseInt(args[++i]);
+                    if (opponents < 1 || opponents > 4) {
+                        throw new IllegalArgumentException("Commander opponents must be between 1 and 4");
+                    }
+                    options.commanderOpponents = opponents;
+                    break;
+
                 default:
                     throw new IllegalArgumentException("Unknown option: " + arg);
             }
@@ -392,6 +547,8 @@ public class DeckTesterCLI {
         System.out.println("  --top NUM                Number of top decks to download (default: " + DEFAULT_TOP_DECKS + ")");
         System.out.println("  -o, --output FILE        Save results to CSV file");
         System.out.println("  --ai-profile PROFILE     AI difficulty (Default, Cautious, Reckless, Experimental)");
+        System.out.println("  --live                   Show live game progress (turn, phase, life totals)");
+        System.out.println("  --commander-opponents N  Number of AI opponents in Commander (1-4, default: 1)");
         System.out.println();
         System.out.println("Cache Options:");
         System.out.println("  --force-refresh          Re-download decks ignoring cache");
@@ -400,6 +557,7 @@ public class DeckTesterCLI {
         System.out.println("Other Options:");
         System.out.println("  -h, --help               Show this help message");
         System.out.println("  -v, --version            Show version information");
+        System.out.println("  --verbose                Show all internal Forge errors and warnings");
         System.out.println();
         System.out.println("Examples:");
         System.out.println("  # Test deck against downloaded top 100 decks (uses cache)");
@@ -455,7 +613,10 @@ public class DeckTesterCLI {
         int topDecksCount = DEFAULT_TOP_DECKS;
         String outputFile = null;
         String aiProfile = "Default";
+        boolean showLiveProgress = false;
+        boolean verbose = false;
         boolean showHelp = false;
         boolean showVersion = false;
+        int commanderOpponents = 1; // 1-4 opponents in Commander
     }
 }

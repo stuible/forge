@@ -4,6 +4,7 @@ import forge.deck.Deck;
 import forge.deck.DeckSection;
 import forge.deck.io.DeckSerializer;
 import forge.game.*;
+import forge.game.player.Player;
 import forge.game.player.RegisteredPlayer;
 import forge.gamemodes.match.HostedMatch;
 import forge.gui.GuiBase;
@@ -40,6 +41,36 @@ public class DeckTester {
     private final Map<String, TestResults> resultsCache;
     private volatile boolean initialized = false;
     private String aiProfile = "Default";
+    private boolean showLiveProgress = false;
+    private volatile boolean cancelled = false;
+    private int gameTimeoutSeconds = 120; // 2 minute timeout per game (reduced from 5 to handle stalling games)
+    private int commanderOpponents = 1; // Number of AI opponents in Commander games (1-4)
+
+    // Live stats tracking
+    private volatile int totalGamesPlayed = 0;
+    private volatile int totalWins = 0;
+    private volatile int totalLosses = 0;
+    private volatile int totalDraws = 0;
+    private volatile int totalGamesExpected = 0;
+
+    // Direct output stream for live display (bypasses filters)
+    private PrintStream directOut = System.out;
+
+    // Active game tracking for unified display
+    private final Map<String, GameState> activeGames = new ConcurrentHashMap<>();
+    private volatile boolean displayRunning = false;
+    private Thread displayThread = null;
+
+    // Game state snapshot for display
+    private static class GameState {
+        volatile int turn = 0;
+        volatile String phase = "Starting";
+        volatile List<Integer> playerLives = new ArrayList<>();
+        volatile List<String> playerNames = new ArrayList<>();
+        volatile String opponentName = "";
+        volatile boolean isCommander = false;
+        volatile int numPlayers = 2;
+    }
 
     public DeckTester() {
         this.executor = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
@@ -52,6 +83,44 @@ public class DeckTester {
      */
     public void setAiProfile(String profile) {
         this.aiProfile = profile;
+    }
+
+    /**
+     * Enable/disable live progress display during games.
+     */
+    public void setShowLiveProgress(boolean show) {
+        this.showLiveProgress = show;
+    }
+
+    /**
+     * Set the timeout for individual games (in seconds).
+     */
+    public void setGameTimeout(int timeoutSeconds) {
+        this.gameTimeoutSeconds = timeoutSeconds;
+    }
+
+    /**
+     * Cancel the current test run gracefully.
+     */
+    public void cancel() {
+        this.cancelled = true;
+    }
+
+    /**
+     * Set the number of AI opponents for Commander games (1-4).
+     */
+    public void setCommanderOpponents(int opponents) {
+        if (opponents < 1 || opponents > 4) {
+            throw new IllegalArgumentException("Commander opponents must be between 1 and 4");
+        }
+        this.commanderOpponents = opponents;
+    }
+
+    /**
+     * Set the direct output stream for live progress (bypasses stdout filtering).
+     */
+    public void setDirectOutputStream(PrintStream out) {
+        this.directOut = out;
     }
 
     /**
@@ -110,9 +179,23 @@ public class DeckTester {
 
         initialize();
 
+        // Reset stats for this test run
+        totalGamesPlayed = 0;
+        totalWins = 0;
+        totalLosses = 0;
+        totalDraws = 0;
+        totalGamesExpected = opponentDecks.size() * gamesPerMatchup;
+        activeGames.clear();
+        cancelled = false;
+
         System.out.printf("%nTesting deck: %s%n", testDeck.getName());
-        System.out.printf("Against %d opponent decks, %d games each%n%n",
-                opponentDecks.size(), gamesPerMatchup);
+        System.out.printf("Against %d opponent decks, %d games each (%d total games)%n%n",
+                opponentDecks.size(), gamesPerMatchup, totalGamesExpected);
+
+        // Start unified display thread if live progress is enabled
+        if (showLiveProgress) {
+            startUnifiedDisplay();
+        }
 
         Map<String, MatchupResult> results = new ConcurrentHashMap<>();
         List<Future<MatchupResult>> futures = new ArrayList<>();
@@ -143,14 +226,30 @@ public class DeckTester {
             futures.add(future);
         }
 
-        // Collect results
+        // Collect results (allowing for cancellation)
         for (Future<MatchupResult> future : futures) {
             try {
                 MatchupResult result = future.get();
                 results.put(result.opponentName, result);
             } catch (Exception e) {
+                if (cancelled) {
+                    System.err.println("\nTesting cancelled by user");
+                    break;
+                }
                 System.err.println("Error in matchup: " + e.getMessage());
             }
+        }
+
+        // If cancelled, cancel remaining futures
+        if (cancelled) {
+            for (Future<MatchupResult> future : futures) {
+                future.cancel(true);
+            }
+        }
+
+        // Stop unified display
+        if (showLiveProgress) {
+            stopUnifiedDisplay();
         }
 
         return results;
@@ -162,16 +261,28 @@ public class DeckTester {
     private MatchupResult runMatchup(Deck deck1, Deck deck2, int numGames) {
         MatchupResult result = new MatchupResult(deck1.getName(), deck2.getName());
 
-        for (int i = 0; i < numGames; i++) {
+        for (int i = 0; i < numGames && !cancelled; i++) {
             try {
                 GameOutcome outcome = playGame(deck1, deck2);
 
                 if (outcome.isDraw()) {
                     result.draws++;
-                } else if (outcome.getWinningLobbyPlayer().getName().equals("AI-1")) {
+                    synchronized (this) {
+                        totalDraws++;
+                        totalGamesPlayed++;
+                    }
+                } else if (outcome.getWinningLobbyPlayer().getName().equals("Input Deck")) {
                     result.wins++;
+                    synchronized (this) {
+                        totalWins++;
+                        totalGamesPlayed++;
+                    }
                 } else {
                     result.losses++;
+                    synchronized (this) {
+                        totalLosses++;
+                        totalGamesPlayed++;
+                    }
                 }
 
                 // Track game length
@@ -190,33 +301,251 @@ public class DeckTester {
      * Play a single game between two decks.
      */
     private GameOutcome playGame(Deck deck1, Deck deck2) {
+        // Detect format first
+        boolean isCommander = isCommanderDeck(deck1) || isCommanderDeck(deck2);
+
         // Create players with specified AI profile
         List<RegisteredPlayer> players = new ArrayList<>();
 
-        RegisteredPlayer rp1 = new RegisteredPlayer(deck1);
-        rp1.setPlayer(GamePlayerUtil.createAiPlayer("AI-1", aiProfile));
+        // Use appropriate RegisteredPlayer factory method based on format
+        RegisteredPlayer rp1 = isCommander ? RegisteredPlayer.forCommander(deck1) : new RegisteredPlayer(deck1);
+        rp1.setPlayer(GamePlayerUtil.createAiPlayer("Input Deck", aiProfile));
         players.add(rp1);
 
-        RegisteredPlayer rp2 = new RegisteredPlayer(deck2);
-        rp2.setPlayer(GamePlayerUtil.createAiPlayer("AI-2", aiProfile));
+        RegisteredPlayer rp2 = isCommander ? RegisteredPlayer.forCommander(deck2) : new RegisteredPlayer(deck2);
+        rp2.setPlayer(GamePlayerUtil.createAiPlayer("Opponent 1", aiProfile));
         players.add(rp2);
 
-        // Detect format and set up appropriate game rules
-        boolean isCommander = isCommanderDeck(deck1) || isCommanderDeck(deck2);
+        // For Commander with multiple opponents, add additional AI players
+        if (isCommander && commanderOpponents > 1) {
+            for (int i = 2; i <= commanderOpponents; i++) {
+                RegisteredPlayer rpExtra = RegisteredPlayer.forCommander(deck2);
+                rpExtra.setPlayer(GamePlayerUtil.createAiPlayer("Opponent " + i, aiProfile));
+                players.add(rpExtra);
+            }
+        }
+
+        // Set up appropriate game rules
         GameType gameType = isCommander ? GameType.Commander : GameType.Constructed;
 
         GameRules rules = new GameRules(gameType);
+        if (isCommander) {
+            rules.addAppliedVariant(GameType.Commander);
+        }
         rules.setGamesPerMatch(1);
         rules.setManaBurn(false);
 
         // Create match and game
         Match match = new Match(rules, players, "Test");
-        Game game = match.createGame();
+        final Game game = match.createGame();
 
-        // Start and run the game
-        match.startGame(game);
+        if (showLiveProgress) {
+            // Run game in separate thread and monitor progress
+            CompletableFuture<Void> gameFuture = CompletableFuture.runAsync(() -> {
+                match.startGame(game);
+            });
+
+            // Monitor game progress in real-time
+            monitorGameProgress(game, deck1.getName(), deck2.getName(), isCommander);
+
+            // Wait for game to complete with timeout
+            try {
+                gameFuture.get(gameTimeoutSeconds, TimeUnit.SECONDS);
+            } catch (TimeoutException e) {
+                System.err.println("\nGame timed out after " + gameTimeoutSeconds + " seconds");
+                gameFuture.cancel(true);
+                // Force game to end by having first player concede
+                if (!game.isGameOver() && !game.getPlayers().isEmpty()) {
+                    game.getPlayers().get(0).concede();
+                }
+            } catch (Exception e) {
+                System.err.println("\nGame interrupted: " + e.getMessage());
+            }
+        } else {
+            // Run game normally without monitoring but with timeout
+            ExecutorService gameExecutor = Executors.newSingleThreadExecutor();
+            Future<?> gameFuture = gameExecutor.submit(() -> match.startGame(game));
+            try {
+                gameFuture.get(gameTimeoutSeconds, TimeUnit.SECONDS);
+            } catch (TimeoutException e) {
+                System.err.println("\nGame timed out after " + gameTimeoutSeconds + " seconds");
+                gameFuture.cancel(true);
+                // Force game to end by having first player concede
+                if (!game.isGameOver() && !game.getPlayers().isEmpty()) {
+                    game.getPlayers().get(0).concede();
+                }
+            } catch (Exception e) {
+                // Game completed or interrupted
+            } finally {
+                gameExecutor.shutdown();
+            }
+        }
 
         return game.getOutcome();
+    }
+
+    /**
+     * Monitor game progress and update shared state for unified display.
+     */
+    private void monitorGameProgress(Game game, String deck1Name, String deck2Name, boolean isCommander) {
+        String gameId = Thread.currentThread().getName();
+        GameState state = new GameState();
+        state.opponentName = deck2Name;
+        state.isCommander = isCommander;
+
+        // Initialize player tracking
+        List<Player> gamePlayers = new ArrayList<>(game.getPlayers());
+        state.numPlayers = gamePlayers.size();
+
+        // Set initial life and names based on format and number of players
+        int initialLife = isCommander ? 40 : 20;
+        for (int i = 0; i < gamePlayers.size(); i++) {
+            state.playerLives.add(initialLife);
+            state.playerNames.add(gamePlayers.get(i).getName());
+        }
+
+        activeGames.put(gameId, state);
+
+        try {
+            while (!game.isGameOver()) {
+                try {
+                    Thread.sleep(100); // Check every 100ms
+
+                    int currentTurn = game.getPhaseHandler().getTurn();
+                    String currentPhase = game.getPhaseHandler().getPhase() != null ?
+                        game.getPhaseHandler().getPhase().toString() : "Starting";
+
+                    // Update shared state
+                    state.turn = currentTurn;
+                    state.phase = currentPhase;
+
+                    // Update all player life totals
+                    List<Player> players = new ArrayList<>(game.getPlayers());
+                    for (int i = 0; i < players.size(); i++) {
+                        if (i < state.playerLives.size()) {
+                            state.playerLives.set(i, players.get(i).getLife());
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    // Game might be ending, ignore errors
+                    break;
+                }
+            }
+        } finally {
+            // Remove this game from active games when done
+            activeGames.remove(gameId);
+        }
+    }
+
+    /**
+     * Start the unified display thread that shows all active games.
+     */
+    private void startUnifiedDisplay() {
+        displayRunning = true;
+        displayThread = new Thread(() -> {
+            while (displayRunning) {
+                try {
+                    // Clear screen and move to top
+                    directOut.print("\033[2J\033[H");
+
+                    // Build unified display
+                    StringBuilder display = new StringBuilder();
+
+                    // Header
+                    display.append("╔══════════════════════════════════════════════════════════════════════╗\n");
+                    display.append("║                     LIVE TESTING DASHBOARD                           ║\n");
+                    display.append("╚══════════════════════════════════════════════════════════════════════╝\n\n");
+
+                    // Overall stats
+                    double winRate = totalGamesPlayed > 0 ? (totalWins * 100.0 / totalGamesPlayed) : 0;
+                    double progressPercent = totalGamesExpected > 0 ? (totalGamesPlayed * 100.0 / totalGamesExpected) : 0;
+
+                    display.append(String.format("  OVERALL RECORD:     %3d-%3d-%3d  (%5.1f%% Win Rate)\n",
+                        totalWins, totalLosses, totalDraws, winRate));
+                    display.append(String.format("  PROGRESS:           %3d / %3d games  (%5.1f%% complete)\n",
+                        totalGamesPlayed, totalGamesExpected, progressPercent));
+
+                    // Progress bar
+                    int barWidth = 50;
+                    int filled = (int)(progressPercent / 100.0 * barWidth);
+                    display.append("  [");
+                    for (int i = 0; i < barWidth; i++) {
+                        display.append(i < filled ? "█" : "░");
+                    }
+                    display.append("]\n");
+
+                    display.append(String.format("  GAMES IN PROGRESS:  %3d\n\n",
+                        activeGames.size()));
+
+                    display.append("──────────────────────────────────────────────────────────────────────\n\n");
+
+                    // Active games
+                    if (activeGames.isEmpty()) {
+                        display.append("  No games currently running...\n\n");
+                    } else {
+                        display.append("  ACTIVE GAMES:\n\n");
+
+                        int gameNum = 1;
+                        for (Map.Entry<String, GameState> entry : activeGames.entrySet()) {
+                            GameState state = entry.getValue();
+                            display.append(String.format("  Game %d vs %s", gameNum++, state.opponentName));
+                            if (state.numPlayers > 2) {
+                                display.append(String.format(" (%d players)", state.numPlayers));
+                            }
+                            display.append("\n");
+
+                            display.append(String.format("    Turn:   %3d  |  Phase: %-28s\n",
+                                state.turn, state.phase));
+
+                            // Display all player life totals
+                            display.append("    Players: ");
+                            for (int i = 0; i < state.playerLives.size(); i++) {
+                                if (i > 0) display.append(" | ");
+                                String name = i < state.playerNames.size() ? state.playerNames.get(i) : "Player " + (i+1);
+                                display.append(String.format("%-12s %3d", name + ":", state.playerLives.get(i)));
+                            }
+                            display.append("\n\n");
+                        }
+                    }
+
+                    display.append("╚══════════════════════════════════════════════════════════════════════╝\n");
+
+                    // Print the display
+                    directOut.print(display.toString());
+                    directOut.flush();
+
+                    // Update every 200ms
+                    Thread.sleep(200);
+                } catch (InterruptedException e) {
+                    break;
+                } catch (Exception e) {
+                    // Continue on error
+                }
+            }
+
+            // Clear screen when done
+            directOut.print("\033[2J\033[H");
+            directOut.flush();
+        }, "UnifiedDisplay");
+        displayThread.setDaemon(true);
+        displayThread.start();
+    }
+
+    /**
+     * Stop the unified display thread.
+     */
+    private void stopUnifiedDisplay() {
+        displayRunning = false;
+        if (displayThread != null) {
+            try {
+                displayThread.join(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /**
