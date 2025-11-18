@@ -50,8 +50,25 @@ public class DeckTesterCLI {
         DeckTester tester = new DeckTester();
 
         try {
-            // Step 1: Get or download opponent decks
-            List<Deck> opponentDecks = getOpponentDecks(options);
+            // Step 1: Initialize Forge first
+            tester.initialize();
+
+            // Step 2: Load test deck to detect format
+            System.out.println("Loading test deck: " + options.testDeckPath);
+            Deck testDeck = tester.loadDeck(options.testDeckPath);
+
+            // Detect if it's a Commander deck
+            boolean isCommander = testDeck.has(forge.deck.DeckSection.Commander) ||
+                                 testDeck.getAllCardsInASinglePool().countAll() == 100;
+
+            int cardCount = isCommander ? testDeck.getAllCardsInASinglePool().countAll() : testDeck.getMain().countAll();
+            String format = isCommander ? "Commander" : "Standard";
+
+            System.out.printf("Test deck loaded: %s (%d cards, %s format)%n%n",
+                    testDeck.getName(), cardCount, format);
+
+            // Step 3: Get or download opponent decks (using detected format)
+            List<Deck> opponentDecks = getOpponentDecks(tester, options, isCommander);
 
             if (opponentDecks.isEmpty()) {
                 System.err.println("No opponent decks found!");
@@ -60,13 +77,7 @@ public class DeckTesterCLI {
 
             System.out.printf("Loaded %d opponent decks%n%n", opponentDecks.size());
 
-            // Step 2: Load test deck
-            System.out.println("Loading test deck: " + options.testDeckPath);
-            Deck testDeck = tester.loadDeck(options.testDeckPath);
-            System.out.printf("Test deck loaded: %s (%d cards)%n%n",
-                    testDeck.getName(), testDeck.getMain().countAll());
-
-            // Step 3: Run tests
+            // Step 4: Run tests
             System.out.println("AI Profile: " + options.aiProfile);
             System.out.println();
 
@@ -99,13 +110,18 @@ public class DeckTesterCLI {
     /**
      * Get opponent decks (download or load from directory).
      */
-    private static List<Deck> getOpponentDecks(Options options) throws Exception {
-        DeckTester tester = new DeckTester();
-        tester.initialize();
+    private static List<Deck> getOpponentDecks(DeckTester tester, Options options, boolean isCommanderDeck) throws Exception {
 
         if (options.downloadDecks) {
-            // Use default cache directory (.cache/mtggoldfish_decks)
-            MTGGoldfishScraper scraper = new MTGGoldfishScraper();
+            // Determine which cache directory and metagame to use based on format
+            boolean isCommander = isCommanderDeck;
+            MTGGoldfishScraper scraper = new MTGGoldfishScraper(isCommander);
+            String cacheDir = isCommander ? MTGGoldfishScraper.COMMANDER_CACHE_DIR : MTGGoldfishScraper.DEFAULT_CACHE_DIR;
+            String format = isCommander ? "Commander" : "Standard";
+
+            System.out.println("Detected format: " + format);
+            System.out.println("Downloading " + format + " decks from MTGGoldfish...");
+            System.out.println();
 
             // Handle cache clearing
             if (options.clearCache) {
@@ -123,7 +139,7 @@ public class DeckTesterCLI {
             System.out.println();
 
             // Load downloaded decks from cache directory
-            return tester.loadDecksFromDirectory(MTGGoldfishScraper.DEFAULT_CACHE_DIR);
+            return tester.loadDecksFromDirectory(cacheDir);
 
         } else if (options.deckDirectory != null) {
             System.out.println("Loading decks from: " + options.deckDirectory);

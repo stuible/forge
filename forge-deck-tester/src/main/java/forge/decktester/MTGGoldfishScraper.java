@@ -23,24 +23,34 @@ import java.util.regex.Pattern;
  * Includes intelligent caching to avoid re-downloading decks unnecessarily.
  */
 public class MTGGoldfishScraper {
-    private static final String METAGAME_URL = "https://www.mtggoldfish.com/metagame/standard/full#paper";
+    private static final String STANDARD_METAGAME_URL = "https://www.mtggoldfish.com/metagame/standard/full#paper";
+    private static final String COMMANDER_METAGAME_URL = "https://www.mtggoldfish.com/metagame/commander/full#paper";
     private static final String DECK_URL_BASE = "https://www.mtggoldfish.com";
     private static final int MAX_DECKS = 100;
     private static final String USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
     private static final String CACHE_INFO_FILE = ".cache_info.txt";
     private static final int CACHE_EXPIRY_DAYS = 7; // Cache expires after 7 days
     public static final String DEFAULT_CACHE_DIR = ".cache/mtggoldfish_decks";
+    public static final String COMMANDER_CACHE_DIR = ".cache/mtggoldfish_commander_decks";
 
     private final Path outputDir;
     private final Path cacheInfoPath;
+    private String metagameUrl;
+    private boolean isCommanderFormat;
 
     public MTGGoldfishScraper() {
-        this(DEFAULT_CACHE_DIR);
+        this(DEFAULT_CACHE_DIR, false);
     }
 
-    public MTGGoldfishScraper(String outputDirectory) {
+    public MTGGoldfishScraper(boolean isCommander) {
+        this(isCommander ? COMMANDER_CACHE_DIR : DEFAULT_CACHE_DIR, isCommander);
+    }
+
+    public MTGGoldfishScraper(String outputDirectory, boolean isCommander) {
         this.outputDir = Paths.get(outputDirectory);
         this.cacheInfoPath = outputDir.resolve(CACHE_INFO_FILE);
+        this.isCommanderFormat = isCommander;
+        this.metagameUrl = isCommander ? COMMANDER_METAGAME_URL : STANDARD_METAGAME_URL;
     }
 
     /**
@@ -82,7 +92,7 @@ public class MTGGoldfishScraper {
         }
 
         // Fetch metagame page
-        String metaGameHtml = fetchUrl(METAGAME_URL);
+        String metaGameHtml = fetchUrl(metagameUrl);
 
         // Parse deck URLs
         List<DeckInfo> deckList = parseMetagamePage(metaGameHtml, Math.min(maxDecks, MAX_DECKS));

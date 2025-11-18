@@ -1,6 +1,7 @@
 package forge.decktester;
 
 import forge.deck.Deck;
+import forge.deck.DeckSection;
 import forge.deck.io.DeckSerializer;
 import forge.game.*;
 import forge.game.player.RegisteredPlayer;
@@ -200,8 +201,11 @@ public class DeckTester {
         rp2.setPlayer(GamePlayerUtil.createAiPlayer("AI-2", aiProfile));
         players.add(rp2);
 
-        // Set up game rules
-        GameRules rules = new GameRules(GameType.Constructed);
+        // Detect format and set up appropriate game rules
+        boolean isCommander = isCommanderDeck(deck1) || isCommanderDeck(deck2);
+        GameType gameType = isCommander ? GameType.Commander : GameType.Constructed;
+
+        GameRules rules = new GameRules(gameType);
         rules.setGamesPerMatch(1);
         rules.setManaBurn(false);
 
@@ -224,6 +228,14 @@ public class DeckTester {
             throw new FileNotFoundException("Deck file not found: " + filePath);
         }
         return DeckSerializer.fromFile(file);
+    }
+
+    /**
+     * Check if a deck is Commander format.
+     */
+    private boolean isCommanderDeck(Deck deck) {
+        // Commander decks have a Commander section or have exactly 100 cards
+        return deck.has(DeckSection.Commander) || deck.getAllCardsInASinglePool().countAll() == 100;
     }
 
     /**
