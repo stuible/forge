@@ -43,7 +43,7 @@ public class DeckTester {
     private String aiProfile = "Default";
     private boolean showLiveProgress = false;
     private volatile boolean cancelled = false;
-    private int gameTimeoutSeconds = 120; // 2 minute timeout per game (reduced from 5 to handle stalling games)
+    private int gameTimeoutSeconds = 120; // 2 minute timeout per game to prevent infinite loops
     private int commanderOpponents = 1; // Number of AI opponents in Commander games (1-4)
 
     // Live stats tracking
@@ -377,26 +377,38 @@ public class DeckTester {
 
         if (showLiveProgress) {
             // Run game in separate thread and monitor progress
-            CompletableFuture<Void> gameFuture = CompletableFuture.runAsync(() -> {
+            ExecutorService gameExecutor = Executors.newSingleThreadExecutor();
+            Future<Void> gameFuture = gameExecutor.submit(() -> {
                 match.startGame(game);
+                return null;
             });
 
-            // Monitor game progress in real-time
-            monitorGameProgress(game, deck1.getName(), deck2.getName(), isCommander);
+            // Monitor game progress in real-time (in a separate thread)
+            Thread monitorThread = new Thread(() -> monitorGameProgress(game, deck1.getName(), deck2.getName(), isCommander));
+            monitorThread.setDaemon(true);
+            monitorThread.start();
 
             // Wait for game to complete with timeout
             try {
                 gameFuture.get(gameTimeoutSeconds, TimeUnit.SECONDS);
             } catch (TimeoutException e) {
+                // Timeout - force end the game
+                System.err.println("\nGame timed out - forcing end");
                 gameFuture.cancel(true);
-                // Force game to end by having first player concede
-                if (!game.isGameOver() && !game.getPlayers().isEmpty()) {
-                    game.getPlayers().get(0).concede();
-                }
+                gameExecutor.shutdownNow();
                 throw e; // Re-throw to mark as error
             } catch (Exception e) {
                 System.err.println("\nGame interrupted: " + e.getMessage());
                 throw new RuntimeException("Game interrupted", e);
+            } finally {
+                gameExecutor.shutdown();
+                try {
+                    if (!gameExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                        gameExecutor.shutdownNow();
+                    }
+                } catch (InterruptedException ie) {
+                    gameExecutor.shutdownNow();
+                }
             }
         } else {
             // Run game normally without monitoring but with timeout
@@ -405,16 +417,21 @@ public class DeckTester {
             try {
                 gameFuture.get(gameTimeoutSeconds, TimeUnit.SECONDS);
             } catch (TimeoutException e) {
+                System.err.println("\nGame timed out - forcing end");
                 gameFuture.cancel(true);
-                // Force game to end by having first player concede
-                if (!game.isGameOver() && !game.getPlayers().isEmpty()) {
-                    game.getPlayers().get(0).concede();
-                }
+                gameExecutor.shutdownNow();
                 throw e; // Re-throw to mark as error
             } catch (Exception e) {
                 throw new RuntimeException("Game interrupted", e);
             } finally {
                 gameExecutor.shutdown();
+                try {
+                    if (!gameExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                        gameExecutor.shutdownNow();
+                    }
+                } catch (InterruptedException ie) {
+                    gameExecutor.shutdownNow();
+                }
             }
         }
 
