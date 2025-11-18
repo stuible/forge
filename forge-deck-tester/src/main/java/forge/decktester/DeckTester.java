@@ -546,19 +546,30 @@ public class DeckTester {
                             display.append(String.format("    Round:  %3d  |  Phase: %-28s\n",
                                 roundNum, state.phase));
 
-                            // Display all player life totals with active player highlighted
+                            // Display all player life totals with active player bold and leader green
                             display.append("    Players: ");
+
+                            // Find the player with highest life (leader)
+                            int maxLife = state.playerLives.stream().max(Integer::compareTo).orElse(0);
+
                             for (int i = 0; i < state.playerLives.size(); i++) {
                                 if (i > 0) display.append(" | ");
                                 String name = i < state.playerNames.size() ? state.playerNames.get(i) : "Player " + (i+1);
+                                int life = state.playerLives.get(i);
                                 boolean isActive = name.equals(state.activePlayerName);
+                                boolean isLeader = life == maxLife && life > 0;
 
-                                // Use ANSI green color for active player
+                                // Use ANSI bold for active player, green for leader
                                 if (isActive) {
+                                    display.append("\033[1m"); // Bold
+                                }
+                                if (isLeader) {
                                     display.append("\033[32m"); // Green
                                 }
-                                display.append(String.format("%-12s %3d", name + ":", state.playerLives.get(i)));
-                                if (isActive) {
+
+                                display.append(String.format("%-12s %3d", name + ":", life));
+
+                                if (isActive || isLeader) {
                                     display.append("\033[0m"); // Reset
                                 }
                             }
