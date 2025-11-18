@@ -38,10 +38,19 @@ public class DeckTester {
     private final ExecutorService executor;
     private final Map<String, TestResults> resultsCache;
     private volatile boolean initialized = false;
+    private String aiProfile = "Default";
 
     public DeckTester() {
         this.executor = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
         this.resultsCache = new ConcurrentHashMap<>();
+    }
+
+    /**
+     * Set the AI profile for both players.
+     * @param profile Profile name: Default, Cautious, Reckless, or Experimental
+     */
+    public void setAiProfile(String profile) {
+        this.aiProfile = profile;
     }
 
     /**
@@ -180,15 +189,15 @@ public class DeckTester {
      * Play a single game between two decks.
      */
     private GameOutcome playGame(Deck deck1, Deck deck2) {
-        // Create players
+        // Create players with specified AI profile
         List<RegisteredPlayer> players = new ArrayList<>();
 
         RegisteredPlayer rp1 = new RegisteredPlayer(deck1);
-        rp1.setPlayer(GamePlayerUtil.createAiPlayer("AI-1"));
+        rp1.setPlayer(GamePlayerUtil.createAiPlayer("AI-1", aiProfile));
         players.add(rp1);
 
         RegisteredPlayer rp2 = new RegisteredPlayer(deck2);
-        rp2.setPlayer(GamePlayerUtil.createAiPlayer("AI-2"));
+        rp2.setPlayer(GamePlayerUtil.createAiPlayer("AI-2", aiProfile));
         players.add(rp2);
 
         // Set up game rules

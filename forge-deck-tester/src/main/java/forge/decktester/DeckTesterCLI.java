@@ -67,8 +67,12 @@ public class DeckTesterCLI {
                     testDeck.getName(), testDeck.getMain().countAll());
 
             // Step 3: Run tests
+            System.out.println("AI Profile: " + options.aiProfile);
+            System.out.println();
+
             long startTime = System.currentTimeMillis();
 
+            tester.setAiProfile(options.aiProfile);
             Map<String, MatchupResult> results = tester.testDeck(
                     testDeck,
                     opponentDecks,
@@ -324,6 +328,18 @@ public class DeckTesterCLI {
                     options.outputFile = args[++i];
                     break;
 
+                case "--ai-profile":
+                    if (i + 1 >= args.length) {
+                        throw new IllegalArgumentException("Missing AI profile name after " + arg);
+                    }
+                    String profile = args[++i];
+                    if (!profile.equals("Default") && !profile.equals("Cautious") &&
+                        !profile.equals("Reckless") && !profile.equals("Experimental")) {
+                        throw new IllegalArgumentException("Invalid AI profile. Choose: Default, Cautious, Reckless, or Experimental");
+                    }
+                    options.aiProfile = profile;
+                    break;
+
                 default:
                     throw new IllegalArgumentException("Unknown option: " + arg);
             }
@@ -363,6 +379,7 @@ public class DeckTesterCLI {
         System.out.println("  -n, --games NUM          Games per matchup (default: " + DEFAULT_GAMES + ")");
         System.out.println("  --top NUM                Number of top decks to download (default: " + DEFAULT_TOP_DECKS + ")");
         System.out.println("  -o, --output FILE        Save results to CSV file");
+        System.out.println("  --ai-profile PROFILE     AI difficulty (Default, Cautious, Reckless, Experimental)");
         System.out.println();
         System.out.println("Cache Options:");
         System.out.println("  --force-refresh          Re-download decks ignoring cache");
@@ -425,6 +442,7 @@ public class DeckTesterCLI {
         int gamesPerMatchup = DEFAULT_GAMES;
         int topDecksCount = DEFAULT_TOP_DECKS;
         String outputFile = null;
+        String aiProfile = "Default";
         boolean showHelp = false;
         boolean showVersion = false;
     }

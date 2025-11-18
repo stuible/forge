@@ -1,5 +1,10 @@
 package forge.decktester;
 
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
+
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -24,9 +29,14 @@ public class MTGGoldfishScraper {
     private static final String USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
     private static final String CACHE_INFO_FILE = ".cache_info.txt";
     private static final int CACHE_EXPIRY_DAYS = 7; // Cache expires after 7 days
+    private static final String DEFAULT_CACHE_DIR = ".cache/mtggoldfish_decks";
 
     private final Path outputDir;
     private final Path cacheInfoPath;
+
+    public MTGGoldfishScraper() {
+        this(DEFAULT_CACHE_DIR);
+    }
 
     public MTGGoldfishScraper(String outputDirectory) {
         this.outputDir = Paths.get(outputDirectory);
@@ -51,11 +61,17 @@ public class MTGGoldfishScraper {
 
         // Check cache validity
         if (!forceRefresh && isCacheValid()) {
-            System.out.println("Using cached decks (cache is valid)...");
             List<DeckInfo> cachedDecks = loadFromCache();
             if (!cachedDecks.isEmpty()) {
-                System.out.printf("Loaded %d decks from cache%n", cachedDecks.size());
-                return cachedDecks.subList(0, Math.min(maxDecks, cachedDecks.size()));
+                // If cache has enough decks, use it
+                if (cachedDecks.size() >= maxDecks) {
+                    System.out.printf("Using cached decks (%d decks in cache)%n", cachedDecks.size());
+                    return cachedDecks.subList(0, maxDecks);
+                } else {
+                    // Cache doesn't have enough decks, need to re-download
+                    System.out.printf("Cache only has %d decks but %d requested - re-downloading...%n",
+                                     cachedDecks.size(), maxDecks);
+                }
             }
         }
 
@@ -80,6 +96,14 @@ public class MTGGoldfishScraper {
             try {
                 String deckHtml = fetchUrl(DECK_URL_BASE + deckInfo.url);
                 String deckText = parseDeckPage(deckHtml);
+
+                // Debug: Save raw HTML if deck parsing fails
+                if (deckText.isEmpty()) {
+                    Path debugPath = outputDir.resolve(sanitizeFilename(deckInfo.name) + "_debug.html");
+                    Files.writeString(debugPath, deckHtml);
+                    System.err.println("Warning: Could not parse deck list for '" + deckInfo.name + "'. HTML saved to " + debugPath + " for debugging.");
+                }
+
                 String forgeDeck = convertToForgeDeck(deckInfo.name, deckText);
 
                 // Save to file
@@ -217,7 +241,7 @@ public class MTGGoldfishScraper {
             Pattern.compile("href=\"(/archetype/[^\"]+)\"[^>]*>([^<]+)", Pattern.CASE_INSENSITIVE)
         };
 
-        Set<String> seenUrls = new HashSet<>();
+        Set<String> seenArchetypes = new HashSet<>();
 
         for (Pattern pattern : patterns) {
             Matcher matcher = pattern.matcher(html);
@@ -225,9 +249,14 @@ public class MTGGoldfishScraper {
                 String url = matcher.group(1);
                 String name = matcher.group(2).trim().replaceAll("<[^>]+>", "");
 
-                // Avoid duplicates
-                if (!seenUrls.contains(url) && !name.isEmpty()) {
-                    seenUrls.add(url);
+                // Normalize URL by removing fragment (#online, #paper)
+                // This prevents downloading the same archetype twice
+                String baseUrl = url.split("#")[0];
+
+                // Avoid duplicates based on archetype (ignoring #online vs #paper)
+                if (!seenArchetypes.contains(baseUrl) && !name.isEmpty()) {
+                    seenArchetypes.add(baseUrl);
+                    // Keep the first URL variant we see
                     decks.add(new DeckInfo(name, url));
                 }
             }
@@ -243,20 +272,94 @@ public class MTGGoldfishScraper {
 
     /**
      * Parse deck page to extract deck list.
+     * For archetype pages, extracts from JavaScript initializeDeckComponents.
+     * For individual deck pages, extracts from textarea.
      */
     private String parseDeckPage(String html) {
-        // Look for deck export in text format
-        Pattern pattern = Pattern.compile(
-            "<textarea[^>]*class=\"deck-textarea\"[^>]*>([^<]+)</textarea>",
-            Pattern.CASE_INSENSITIVE | Pattern.DOTALL
-        );
+        try {
+            // Method 1: Extract from JavaScript initializeDeckComponents (for archetype pages)
+            // Pattern: initializeDeckComponents('...', '...', "1%20Card%0A2%20Another%0A...", '...')
+            Pattern jsPattern = Pattern.compile(
+                "initializeDeckComponents\\([^,]+,\\s*[^,]+,\\s*\"([^\"]+)\"",
+                Pattern.CASE_INSENSITIVE
+            );
+            Matcher jsMatcher = jsPattern.matcher(html);
+            if (jsMatcher.find()) {
+                String urlEncodedDeck = jsMatcher.group(1);
+                try {
+                    // URL decode the deck list
+                    String decoded = java.net.URLDecoder.decode(urlEncodedDeck, "UTF-8");
+                    if (!decoded.isEmpty()) {
+                        return decoded;
+                    }
+                } catch (Exception e) {
+                    System.err.println("Failed to decode deck list: " + e.getMessage());
+                }
+            }
 
-        Matcher matcher = pattern.matcher(html);
-        if (matcher.find()) {
-            return matcher.group(1).trim();
+            // Method 2: Textarea (for individual deck pages)
+            Document doc = Jsoup.parse(html);
+            Elements textareas = doc.select("textarea.deck-textarea");
+            if (!textareas.isEmpty()) {
+                return textareas.first().text();
+            }
+
+            // Method 3: Parse HTML deck tables (fallback)
+            StringBuilder deckText = new StringBuilder();
+            Elements deckTables = doc.select("table.deck-view-deck-table, div.archetype-deck table, div.deck-view table");
+
+            if (!deckTables.isEmpty()) {
+                for (Element table : deckTables) {
+                    Elements rows = table.select("tr");
+                    for (Element row : rows) {
+                        Elements qtyCells = row.select("td.deck-col-qty, td:first-child");
+                        Elements cardCells = row.select("td.deck-col-card, td:nth-child(2)");
+
+                        if (!qtyCells.isEmpty() && !cardCells.isEmpty()) {
+                            String quantity = qtyCells.first().text().trim();
+                            String cardName = cardCells.first().text().trim();
+
+                            Element link = cardCells.first().selectFirst("a");
+                            if (link != null) {
+                                cardName = link.text().trim();
+                            }
+
+                            if (!quantity.isEmpty() && !cardName.isEmpty() && quantity.matches("\\d+")) {
+                                deckText.append(quantity).append(" ").append(cardName).append("\n");
+                            }
+                        }
+                    }
+                }
+            }
+
+            String result = deckText.toString().trim();
+            if (!result.isEmpty()) {
+                return result;
+            }
+
+            // Method 4: Look for any table rows with card data
+            Elements allTables = doc.select("table");
+            for (Element table : allTables) {
+                Elements rows = table.select("tr");
+                for (Element row : rows) {
+                    Elements cells = row.select("td");
+                    if (cells.size() >= 2) {
+                        String first = cells.get(0).text().trim();
+                        String second = cells.get(1).text().trim();
+
+                        if (first.matches("\\d+") && !second.isEmpty()) {
+                            deckText.append(first).append(" ").append(second).append("\n");
+                        }
+                    }
+                }
+            }
+
+            return deckText.toString().trim();
+
+        } catch (Exception e) {
+            System.err.println("Error parsing deck page: " + e.getMessage());
+            return "";
         }
-
-        return "";
     }
 
     /**
