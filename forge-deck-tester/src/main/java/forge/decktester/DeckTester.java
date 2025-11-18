@@ -68,6 +68,7 @@ public class DeckTester {
         volatile String phase = "Starting";
         volatile List<Integer> playerLives = new ArrayList<>();
         volatile List<String> playerNames = new ArrayList<>();
+        volatile String activePlayerName = "";
         volatile String opponentName = "";
         volatile boolean isCommander = false;
         volatile int numPlayers = 2;
@@ -352,6 +353,10 @@ public class DeckTester {
             }
         }
 
+        // Randomize player order for turn order (but keep track of original)
+        List<RegisteredPlayer> randomizedPlayers = new ArrayList<>(players);
+        Collections.shuffle(randomizedPlayers);
+
         // Set up appropriate game rules
         GameType gameType = isCommander ? GameType.Commander : GameType.Constructed;
 
@@ -362,8 +367,8 @@ public class DeckTester {
         rules.setGamesPerMatch(1);
         rules.setManaBurn(false);
 
-        // Create match and game
-        Match match = new Match(rules, players, "Test");
+        // Create match and game with randomized player order
+        Match match = new Match(rules, randomizedPlayers, "Test");
         final Game game = match.createGame();
 
         if (showLiveProgress) {
@@ -443,9 +448,14 @@ public class DeckTester {
                     String currentPhase = game.getPhaseHandler().getPhase() != null ?
                         game.getPhaseHandler().getPhase().toString() : "Starting";
 
+                    // Get active player
+                    Player activePlayer = game.getPhaseHandler().getPlayerTurn();
+                    String activeName = activePlayer != null ? activePlayer.getName() : "";
+
                     // Update shared state
                     state.turn = currentTurn;
                     state.phase = currentPhase;
+                    state.activePlayerName = activeName;
 
                     // Update all player life totals
                     List<Player> players = new ArrayList<>(game.getPlayers());
@@ -530,12 +540,21 @@ public class DeckTester {
                             display.append(String.format("    Turn:   %3d  |  Phase: %-28s\n",
                                 state.turn, state.phase));
 
-                            // Display all player life totals
+                            // Display all player life totals with active player highlighted
                             display.append("    Players: ");
                             for (int i = 0; i < state.playerLives.size(); i++) {
                                 if (i > 0) display.append(" | ");
                                 String name = i < state.playerNames.size() ? state.playerNames.get(i) : "Player " + (i+1);
+                                boolean isActive = name.equals(state.activePlayerName);
+
+                                // Use ANSI green color for active player
+                                if (isActive) {
+                                    display.append("\033[32m"); // Green
+                                }
                                 display.append(String.format("%-12s %3d", name + ":", state.playerLives.get(i)));
+                                if (isActive) {
+                                    display.append("\033[0m"); // Reset
+                                }
                             }
                             display.append("\n\n");
                         }
