@@ -51,6 +51,7 @@ public class DeckTester {
     private volatile int totalWins = 0;
     private volatile int totalLosses = 0;
     private volatile int totalDraws = 0;
+    private volatile int totalErrors = 0;
     private volatile int totalGamesExpected = 0;
 
     // Direct output stream for live display (bypasses filters)
@@ -184,6 +185,7 @@ public class DeckTester {
         totalWins = 0;
         totalLosses = 0;
         totalDraws = 0;
+        totalErrors = 0;
         totalGamesExpected = opponentDecks.size() * gamesPerMatchup;
         activeGames.clear();
         cancelled = false;
@@ -210,14 +212,27 @@ public class DeckTester {
 
                 // Print progress
                 synchronized (System.out) {
-                    System.out.printf("[%d/%d] vs %s: %d-%d-%d (%.1f%% winrate)%n",
-                            matchupNumber,
-                            opponentDecks.size(),
-                            opponent.getName(),
-                            result.wins,
-                            result.losses,
-                            result.draws,
-                            result.getWinRate() * 100);
+                    if (result.errors > 0) {
+                        System.out.printf("[%d/%d] vs %s: %d-%d-%d-%d (%.1f%% winrate, %d errors)%n",
+                                matchupNumber,
+                                opponentDecks.size(),
+                                opponent.getName(),
+                                result.wins,
+                                result.losses,
+                                result.draws,
+                                result.errors,
+                                result.getWinRate() * 100,
+                                result.errors);
+                    } else {
+                        System.out.printf("[%d/%d] vs %s: %d-%d-%d (%.1f%% winrate)%n",
+                                matchupNumber,
+                                opponentDecks.size(),
+                                opponent.getName(),
+                                result.wins,
+                                result.losses,
+                                result.draws,
+                                result.getWinRate() * 100);
+                    }
                 }
 
                 return result;
@@ -288,9 +303,20 @@ public class DeckTester {
                 // Track game length
                 result.totalTurns += outcome.getLastTurnNumber();
 
-            } catch (Exception e) {
-                System.err.println("Error in game " + i + ": " + e.getMessage());
+            } catch (TimeoutException e) {
+                System.err.println("Game " + (i + 1) + " timed out after " + gameTimeoutSeconds + " seconds");
                 result.errors++;
+                synchronized (this) {
+                    totalErrors++;
+                    totalGamesPlayed++;
+                }
+            } catch (Exception e) {
+                System.err.println("Error in game " + (i + 1) + ": " + e.getMessage());
+                result.errors++;
+                synchronized (this) {
+                    totalErrors++;
+                    totalGamesPlayed++;
+                }
             }
         }
 
@@ -299,8 +325,9 @@ public class DeckTester {
 
     /**
      * Play a single game between two decks.
+     * @throws TimeoutException if the game times out
      */
-    private GameOutcome playGame(Deck deck1, Deck deck2) {
+    private GameOutcome playGame(Deck deck1, Deck deck2) throws TimeoutException {
         // Detect format first
         boolean isCommander = isCommanderDeck(deck1) || isCommanderDeck(deck2);
 
@@ -352,14 +379,15 @@ public class DeckTester {
             try {
                 gameFuture.get(gameTimeoutSeconds, TimeUnit.SECONDS);
             } catch (TimeoutException e) {
-                System.err.println("\nGame timed out after " + gameTimeoutSeconds + " seconds");
                 gameFuture.cancel(true);
                 // Force game to end by having first player concede
                 if (!game.isGameOver() && !game.getPlayers().isEmpty()) {
                     game.getPlayers().get(0).concede();
                 }
+                throw e; // Re-throw to mark as error
             } catch (Exception e) {
                 System.err.println("\nGame interrupted: " + e.getMessage());
+                throw new RuntimeException("Game interrupted", e);
             }
         } else {
             // Run game normally without monitoring but with timeout
@@ -368,14 +396,14 @@ public class DeckTester {
             try {
                 gameFuture.get(gameTimeoutSeconds, TimeUnit.SECONDS);
             } catch (TimeoutException e) {
-                System.err.println("\nGame timed out after " + gameTimeoutSeconds + " seconds");
                 gameFuture.cancel(true);
                 // Force game to end by having first player concede
                 if (!game.isGameOver() && !game.getPlayers().isEmpty()) {
                     game.getPlayers().get(0).concede();
                 }
+                throw e; // Re-throw to mark as error
             } catch (Exception e) {
-                // Game completed or interrupted
+                throw new RuntimeException("Game interrupted", e);
             } finally {
                 gameExecutor.shutdown();
             }
@@ -460,11 +488,13 @@ public class DeckTester {
                     display.append("╚══════════════════════════════════════════════════════════════════════╝\n\n");
 
                     // Overall stats
-                    double winRate = totalGamesPlayed > 0 ? (totalWins * 100.0 / totalGamesPlayed) : 0;
+                    int validGames = totalGamesPlayed - totalErrors;
+                    double winRate = validGames > 0 ? (totalWins * 100.0 / validGames) : 0;
                     double progressPercent = totalGamesExpected > 0 ? (totalGamesPlayed * 100.0 / totalGamesExpected) : 0;
 
                     display.append(String.format("  OVERALL RECORD:     %3d-%3d-%3d  (%5.1f%% Win Rate)\n",
                         totalWins, totalLosses, totalDraws, winRate));
+                    display.append(String.format("  ERRORS:             %3d  (timeouts/crashes)\n", totalErrors));
                     display.append(String.format("  PROGRESS:           %3d / %3d games  (%5.1f%% complete)\n",
                         totalGamesPlayed, totalGamesExpected, progressPercent));
 

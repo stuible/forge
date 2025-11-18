@@ -312,30 +312,39 @@ public class DeckTesterCLI {
                 .mapToInt(m -> m.draws)
                 .sum();
 
+        int totalErrors = results.matchups.values().stream()
+                .mapToInt(m -> m.errors)
+                .sum();
+
+        int validGames = totalWins + totalLosses + totalDraws;
+
         System.out.println("OVERALL PERFORMANCE");
         System.out.println("-".repeat(80));
         System.out.printf("Total Games:        %d%n", totalGames);
+        System.out.printf("Valid Games:        %d%n", validGames);
         System.out.printf("Total Wins:         %d (%.1f%%)%n", totalWins,
-                (double) totalWins / (totalWins + totalLosses) * 100);
+                validGames > 0 ? (double) totalWins / validGames * 100 : 0);
         System.out.printf("Total Losses:       %d (%.1f%%)%n", totalLosses,
-                (double) totalLosses / (totalWins + totalLosses) * 100);
+                validGames > 0 ? (double) totalLosses / validGames * 100 : 0);
         System.out.printf("Total Draws:        %d (%.1f%%)%n", totalDraws,
-                (double) totalDraws / totalGames * 100);
+                validGames > 0 ? (double) totalDraws / validGames * 100 : 0);
+        System.out.printf("Total Errors:       %d (timeouts/crashes)%n", totalErrors);
         System.out.printf("Overall Win Rate:   %.2f%%%n%n", results.getOverallWinRate() * 100);
 
         // Best matchups
         System.out.println("BEST MATCHUPS (Top 10)");
         System.out.println("-".repeat(80));
-        System.out.printf("%-40s %10s %10s %10s%n", "Opponent", "W-L-D", "Win Rate", "Avg Turns");
+        System.out.printf("%-40s %12s %10s %10s%n", "Opponent", "W-L-D-E", "Win Rate", "Avg Turns");
         System.out.println("-".repeat(80));
 
         List<MatchupResult> bestMatchups = results.getBestMatchups(10);
         for (MatchupResult matchup : bestMatchups) {
-            System.out.printf("%-40s %3d-%3d-%2d  %9.1f%%  %9.1f%n",
+            System.out.printf("%-40s %3d-%3d-%2d-%2d  %9.1f%%  %9.1f%n",
                     truncate(matchup.opponentName, 40),
                     matchup.wins,
                     matchup.losses,
                     matchup.draws,
+                    matchup.errors,
                     matchup.getWinRate() * 100,
                     matchup.getAverageTurns());
         }
@@ -343,16 +352,17 @@ public class DeckTesterCLI {
         // Worst matchups
         System.out.println("\nWORST MATCHUPS (Bottom 10)");
         System.out.println("-".repeat(80));
-        System.out.printf("%-40s %10s %10s %10s%n", "Opponent", "W-L-D", "Win Rate", "Avg Turns");
+        System.out.printf("%-40s %12s %10s %10s%n", "Opponent", "W-L-D-E", "Win Rate", "Avg Turns");
         System.out.println("-".repeat(80));
 
         List<MatchupResult> worstMatchups = results.getWorstMatchups(10);
         for (MatchupResult matchup : worstMatchups) {
-            System.out.printf("%-40s %3d-%3d-%2d  %9.1f%%  %9.1f%n",
+            System.out.printf("%-40s %3d-%3d-%2d-%2d  %9.1f%%  %9.1f%n",
                     truncate(matchup.opponentName, 40),
                     matchup.wins,
                     matchup.losses,
                     matchup.draws,
+                    matchup.errors,
                     matchup.getWinRate() * 100,
                     matchup.getAverageTurns());
         }
