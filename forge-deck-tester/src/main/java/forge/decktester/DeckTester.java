@@ -28,6 +28,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -43,7 +44,7 @@ public class DeckTester {
     private String aiProfile = "Default";
     private boolean showLiveProgress = false;
     private volatile boolean cancelled = false;
-    private int gameTimeoutSeconds = 120; // 2 minute timeout per game to prevent infinite loops
+    private int baseGameTimeoutSeconds = 120; // Base timeout for 2-player games
     private int commanderOpponents = 1; // Number of AI opponents in Commander games (1-4)
 
     // Live stats tracking
@@ -95,10 +96,20 @@ public class DeckTester {
     }
 
     /**
-     * Set the timeout for individual games (in seconds).
+     * Set the base timeout for individual games (in seconds).
+     * Actual timeout scales with player count for multiplayer games.
      */
     public void setGameTimeout(int timeoutSeconds) {
-        this.gameTimeoutSeconds = timeoutSeconds;
+        this.baseGameTimeoutSeconds = timeoutSeconds;
+    }
+
+    /**
+     * Calculate timeout based on number of players.
+     * Multiplayer games take longer, so scale timeout accordingly.
+     */
+    private int getGameTimeout(int numPlayers) {
+        // Base timeout * player count (4-player games get 4x timeout)
+        return baseGameTimeoutSeconds * numPlayers;
     }
 
     /**
@@ -201,66 +212,128 @@ public class DeckTester {
         }
 
         Map<String, MatchupResult> results = new ConcurrentHashMap<>();
-        List<Future<MatchupResult>> futures = new ArrayList<>();
 
-        // Submit all matchups to thread pool
-        for (int i = 0; i < opponentDecks.size(); i++) {
-            final Deck opponent = opponentDecks.get(i);
-            final int matchupNumber = i + 1;
-
-            Future<MatchupResult> future = executor.submit(() -> {
-                MatchupResult result = runMatchup(testDeck, opponent, gamesPerMatchup);
-
-                // Print progress
-                synchronized (System.out) {
-                    if (result.errors > 0) {
-                        System.out.printf("[%d/%d] vs %s: %d-%d-%d-%d (%.1f%% winrate, %d errors)%n",
-                                matchupNumber,
-                                opponentDecks.size(),
-                                opponent.getName(),
-                                result.wins,
-                                result.losses,
-                                result.draws,
-                                result.errors,
-                                result.getWinRate() * 100,
-                                result.errors);
-                    } else {
-                        System.out.printf("[%d/%d] vs %s: %d-%d-%d (%.1f%% winrate)%n",
-                                matchupNumber,
-                                opponentDecks.size(),
-                                opponent.getName(),
-                                result.wins,
-                                result.losses,
-                                result.draws,
-                                result.getWinRate() * 100);
-                    }
-                }
-
-                return result;
-            });
-
-            futures.add(future);
+        // Create matchup results tracking
+        Map<String, MatchupResult> matchupResults = new ConcurrentHashMap<>();
+        for (Deck opponent : opponentDecks) {
+            matchupResults.put(opponent.getName(), new MatchupResult(testDeck.getName(), opponent.getName()));
+            // Set number of players for each matchup
+            boolean isCommander = isCommanderDeck(testDeck) || isCommanderDeck(opponent);
+            matchupResults.get(opponent.getName()).numPlayers = isCommander ? commanderOpponents + 1 : 2;
         }
 
-        // Collect results (allowing for cancellation)
-        for (Future<MatchupResult> future : futures) {
+        // Submit all individual games to thread pool (not matchups)
+        List<Future<Void>> futures = new ArrayList<>();
+        AtomicInteger gamesCompleted = new AtomicInteger(0);
+
+        for (Deck opponent : opponentDecks) {
+            for (int gameNum = 0; gameNum < gamesPerMatchup; gameNum++) {
+                final Deck oppDeck = opponent;
+
+                Future<Void> future = executor.submit(() -> {
+                    if (cancelled) return null;
+
+                    MatchupResult result = matchupResults.get(oppDeck.getName());
+
+                    try {
+                        GameOutcome outcome = playGame(testDeck, oppDeck);
+
+                        synchronized (result) {
+                            if (outcome.isDraw()) {
+                                result.draws++;
+                                synchronized (this) {
+                                    totalDraws++;
+                                    totalGamesPlayed++;
+                                }
+                            } else if (outcome.getWinningLobbyPlayer().getName().equals("Input Deck")) {
+                                result.wins++;
+                                synchronized (this) {
+                                    totalWins++;
+                                    totalGamesPlayed++;
+                                }
+                            } else {
+                                result.losses++;
+                                synchronized (this) {
+                                    totalLosses++;
+                                    totalGamesPlayed++;
+                                }
+                            }
+
+                            result.totalTurns += outcome.getLastTurnNumber();
+                        }
+
+                    } catch (TimeoutException e) {
+                        boolean isCmd = isCommanderDeck(testDeck) || isCommanderDeck(oppDeck);
+                        int players = isCmd ? commanderOpponents + 1 : 2;
+                        int timeout = getGameTimeout(players);
+                        System.err.println("Game vs " + oppDeck.getName() + " (" + players + " players) timed out after " + timeout + " seconds");
+                        synchronized (result) {
+                            result.errors++;
+                            synchronized (this) {
+                                totalErrors++;
+                                totalGamesPlayed++;
+                            }
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Game vs " + oppDeck.getName() + " error: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                        synchronized (result) {
+                            result.errors++;
+                            synchronized (this) {
+                                totalErrors++;
+                                totalGamesPlayed++;
+                            }
+                        }
+                    }
+
+                    gamesCompleted.incrementAndGet();
+                    return null;
+                });
+
+                futures.add(future);
+            }
+        }
+
+        // Wait for all games to complete
+        for (Future<Void> future : futures) {
             try {
-                MatchupResult result = future.get();
-                results.put(result.opponentName, result);
+                future.get();
             } catch (Exception e) {
                 if (cancelled) {
-                    System.err.println("\nTesting cancelled by user");
                     break;
                 }
-                System.err.println("Error in matchup: " + e.getMessage());
             }
         }
 
         // If cancelled, cancel remaining futures
         if (cancelled) {
-            for (Future<MatchupResult> future : futures) {
+            for (Future<Void> future : futures) {
                 future.cancel(true);
             }
+        }
+
+        // Print final results for each matchup
+        for (Deck opponent : opponentDecks) {
+            MatchupResult result = matchupResults.get(opponent.getName());
+            synchronized (System.out) {
+                if (result.errors > 0) {
+                    System.out.printf("vs %s: %d-%d-%d-%d (%.1f%% winrate, %d errors)%n",
+                            opponent.getName(),
+                            result.wins,
+                            result.losses,
+                            result.draws,
+                            result.errors,
+                            result.getWinRate() * 100,
+                            result.errors);
+                } else {
+                    System.out.printf("vs %s: %d-%d-%d (%.1f%% winrate)%n",
+                            opponent.getName(),
+                            result.wins,
+                            result.losses,
+                            result.draws,
+                            result.getWinRate() * 100);
+                }
+            }
+            results.put(opponent.getName(), result);
         }
 
         // Stop unified display
@@ -271,62 +344,6 @@ public class DeckTester {
         return results;
     }
 
-    /**
-     * Run a single matchup between two decks.
-     */
-    private MatchupResult runMatchup(Deck deck1, Deck deck2, int numGames) {
-        MatchupResult result = new MatchupResult(deck1.getName(), deck2.getName());
-
-        // Set number of players (1 input deck + opponents)
-        boolean isCommander = isCommanderDeck(deck1) || isCommanderDeck(deck2);
-        result.numPlayers = isCommander ? commanderOpponents + 1 : 2;
-
-        for (int i = 0; i < numGames && !cancelled; i++) {
-            try {
-                GameOutcome outcome = playGame(deck1, deck2);
-
-                if (outcome.isDraw()) {
-                    result.draws++;
-                    synchronized (this) {
-                        totalDraws++;
-                        totalGamesPlayed++;
-                    }
-                } else if (outcome.getWinningLobbyPlayer().getName().equals("Input Deck")) {
-                    result.wins++;
-                    synchronized (this) {
-                        totalWins++;
-                        totalGamesPlayed++;
-                    }
-                } else {
-                    result.losses++;
-                    synchronized (this) {
-                        totalLosses++;
-                        totalGamesPlayed++;
-                    }
-                }
-
-                // Track game length
-                result.totalTurns += outcome.getLastTurnNumber();
-
-            } catch (TimeoutException e) {
-                System.err.println("Game " + (i + 1) + " timed out after " + gameTimeoutSeconds + " seconds");
-                result.errors++;
-                synchronized (this) {
-                    totalErrors++;
-                    totalGamesPlayed++;
-                }
-            } catch (Exception e) {
-                System.err.println("Error in game " + (i + 1) + ": " + e.getMessage());
-                result.errors++;
-                synchronized (this) {
-                    totalErrors++;
-                    totalGamesPlayed++;
-                }
-            }
-        }
-
-        return result;
-    }
 
     /**
      * Play a single game between two decks.
@@ -335,6 +352,8 @@ public class DeckTester {
     private GameOutcome playGame(Deck deck1, Deck deck2) throws TimeoutException {
         // Detect format first
         boolean isCommander = isCommanderDeck(deck1) || isCommanderDeck(deck2);
+        int numPlayers = isCommander ? commanderOpponents + 1 : 2;
+        final int gameTimeoutSeconds = getGameTimeout(numPlayers);
 
         // Create players with specified AI profile
         List<RegisteredPlayer> players = new ArrayList<>();
@@ -478,13 +497,25 @@ public class DeckTester {
                     state.phase = currentPhase;
                     state.activePlayerName = activeName;
 
-                    // Update all player life totals
+                    // Update all player life totals and check if Input Deck is eliminated
                     List<Player> players = new ArrayList<>(game.getPlayers());
+                    Player inputDeckPlayer = null;
+
                     for (int i = 0; i < players.size(); i++) {
                         if (i < state.playerLives.size()) {
                             state.playerLives.set(i, players.get(i).getLife());
                         }
+                        if (players.get(i).getName().equals("Input Deck")) {
+                            inputDeckPlayer = players.get(i);
+                        }
                     }
+
+                    // Early exit optimization: End game immediately if Input Deck has lost
+                    if (inputDeckPlayer != null && inputDeckPlayer.hasLost()) {
+                        // Input Deck is eliminated, we don't need to watch the rest
+                        break;
+                    }
+
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
@@ -568,13 +599,16 @@ public class DeckTester {
 
                             // Find the player with highest life (leader)
                             int maxLife = state.playerLives.stream().max(Integer::compareTo).orElse(0);
+                            // Count how many players have max life (to detect ties)
+                            long playersWithMaxLife = state.playerLives.stream().filter(life -> life == maxLife).count();
 
                             for (int i = 0; i < state.playerLives.size(); i++) {
                                 if (i > 0) display.append(" | ");
                                 String name = i < state.playerNames.size() ? state.playerNames.get(i) : "Player " + (i+1);
                                 int life = state.playerLives.get(i);
                                 boolean isActive = name.equals(state.activePlayerName);
-                                boolean isLeader = life == maxLife && life > 0;
+                                // Only highlight as leader if they're alone in the lead (no tie)
+                                boolean isLeader = life == maxLife && life > 0 && playersWithMaxLife == 1;
 
                                 // Use ANSI bold for active player, green for leader
                                 if (isActive) {
