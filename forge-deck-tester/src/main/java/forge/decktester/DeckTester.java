@@ -946,8 +946,20 @@ public class DeckTester {
                             // Count how many players have max life (to detect ties)
                             long playersWithMaxLife = state.playerLives.stream().filter(life -> life == maxLife).count();
 
-                            for (int i = 0; i < state.playerLives.size(); i++) {
-                                if (i > 0) display.append(" | ");
+                            // Reorder players to show Input Deck first, but maintain turn order
+                            int inputDeckIndex = -1;
+                            for (int i = 0; i < state.playerNames.size(); i++) {
+                                if (state.playerNames.get(i).equals("Input Deck")) {
+                                    inputDeckIndex = i;
+                                    break;
+                                }
+                            }
+
+                            // Display players starting from Input Deck's position
+                            for (int offset = 0; offset < state.playerLives.size(); offset++) {
+                                int i = (inputDeckIndex + offset) % state.playerLives.size();
+                                if (offset > 0) display.append(" | ");
+
                                 String name = i < state.playerNames.size() ? state.playerNames.get(i) : "Player " + (i+1);
                                 int life = state.playerLives.get(i);
                                 boolean isActive = name.equals(state.activePlayerName);
