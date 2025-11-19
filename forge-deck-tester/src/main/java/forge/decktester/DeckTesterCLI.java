@@ -32,10 +32,71 @@ public class DeckTesterCLI {
                 return;
             }
 
+            if (options.workerMode) {
+                runWorkerMode(options);
+                return;
+            }
+
             runDeckTesting(options);
 
         } catch (Exception e) {
             System.err.println("Error: " + e.getMessage());
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    /**
+     * Worker mode: Run a single game and output result to stdout.
+     * This is called by separate processes for true parallelism.
+     */
+    private static void runWorkerMode(Options options) throws Exception {
+        // Suppress ALL output except progress and final result
+        PrintStream nullStream = new PrintStream(new OutputStream() {
+            @Override
+            public void write(int b) {}
+        });
+
+        PrintStream originalOut = System.out;
+        PrintStream originalErr = System.err;
+
+        // Redirect all output to null
+        System.setOut(nullStream);
+        System.setErr(nullStream);
+
+        try {
+            DeckTester tester = new DeckTester();
+            tester.initialize();
+            tester.setAiProfile(options.aiProfile);
+            tester.setCommanderOpponents(options.commanderOpponents);
+
+            // Enable live progress reporting to stdout
+            tester.setProgressOutputStream(originalOut);
+
+            // Load both decks
+            Deck deck1 = tester.loadDeck(options.deck1Path);
+            Deck deck2 = tester.loadDeck(options.deck2Path);
+
+            // Run the game (in-process, but this whole process is isolated)
+            forge.game.GameOutcome outcome = tester.playGameDirect(deck1, deck2);
+
+            // Restore stdout only for result output
+            System.setOut(originalOut);
+
+            // Output result in parseable format
+            String winner = outcome.isDraw() ? "null" : outcome.getWinningLobbyPlayer().getName();
+            int turns = outcome.getLastTurnNumber();
+            boolean isDraw = outcome.isDraw();
+
+            originalOut.println("RESULT:winner=" + winner + ",turns=" + turns + ",draw=" + isDraw);
+            originalOut.flush();
+            System.exit(0);
+
+        } catch (Exception e) {
+            // Restore streams for error output
+            System.setOut(originalOut);
+            System.setErr(originalErr);
+            System.err.println("Worker error: " + e.getMessage());
             e.printStackTrace();
             System.exit(1);
         }
@@ -517,13 +578,31 @@ public class DeckTesterCLI {
                     options.commanderOpponents = opponents;
                     break;
 
+                case "--worker":
+                    options.workerMode = true;
+                    break;
+
+                case "--deck1":
+                    if (i + 1 >= args.length) {
+                        throw new IllegalArgumentException("Missing deck path after " + arg);
+                    }
+                    options.deck1Path = args[++i];
+                    break;
+
+                case "--deck2":
+                    if (i + 1 >= args.length) {
+                        throw new IllegalArgumentException("Missing deck path after " + arg);
+                    }
+                    options.deck2Path = args[++i];
+                    break;
+
                 default:
                     throw new IllegalArgumentException("Unknown option: " + arg);
             }
         }
 
         // Validate options
-        if (!options.showHelp && !options.showVersion) {
+        if (!options.showHelp && !options.showVersion && !options.workerMode) {
             if (options.testDeckPath == null) {
                 throw new IllegalArgumentException("Test deck path is required (-d/--deck)");
             }
@@ -531,6 +610,13 @@ public class DeckTesterCLI {
             if (!options.downloadDecks && options.deckDirectory == null) {
                 throw new IllegalArgumentException(
                         "Must specify either --download or --deck-dir");
+            }
+        }
+
+        // Validate worker mode options
+        if (options.workerMode) {
+            if (options.deck1Path == null || options.deck2Path == null) {
+                throw new IllegalArgumentException("Worker mode requires --deck1 and --deck2");
             }
         }
 
@@ -628,5 +714,10 @@ public class DeckTesterCLI {
         boolean showHelp = false;
         boolean showVersion = false;
         int commanderOpponents = 1; // 1-4 opponents in Commander
+
+        // Worker mode options
+        boolean workerMode = false;
+        String deck1Path = null;
+        String deck2Path = null;
     }
 }

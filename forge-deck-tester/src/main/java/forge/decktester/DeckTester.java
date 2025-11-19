@@ -59,6 +59,9 @@ public class DeckTester {
     // Direct output stream for live display (bypasses filters)
     private PrintStream directOut = System.out;
 
+    // Progress output stream for worker processes
+    private PrintStream progressOut = null;
+
     // Active game tracking for unified display
     private final Map<String, GameState> activeGames = new ConcurrentHashMap<>();
     private volatile boolean displayRunning = false;
@@ -87,6 +90,13 @@ public class DeckTester {
      */
     public void setAiProfile(String profile) {
         this.aiProfile = profile;
+    }
+
+    /**
+     * Set the progress output stream for worker processes.
+     */
+    public void setProgressOutputStream(PrintStream out) {
+        this.progressOut = out;
     }
 
     /**
@@ -208,7 +218,11 @@ public class DeckTester {
                 opponentDecks.size(), gamesPerMatchup, totalGamesExpected);
 
         // Start unified display thread if live progress is enabled
+        // Note: With process parallelism, we show simplified progress (no turn-by-turn details)
         if (showLiveProgress) {
+            if (USE_PROCESS_PARALLELISM) {
+                System.out.println("Note: Live progress shows game completion stats only (process parallelism enabled).\n");
+            }
             startUnifiedDisplay();
         }
 
@@ -237,16 +251,29 @@ public class DeckTester {
                     MatchupResult result = matchupResults.get(oppDeck.getName());
 
                     try {
-                        GameOutcome outcome = playGame(testDeck, oppDeck);
+                        SimpleGameResult gameResult;
+
+                        if (USE_PROCESS_PARALLELISM) {
+                            // Use separate process for true parallelism
+                            gameResult = playGameInProcess(testDeck, oppDeck);
+                        } else {
+                            // Use in-process execution (limited by Forge's internal locks)
+                            GameOutcome outcome = playGame(testDeck, oppDeck);
+                            gameResult = new SimpleGameResult(
+                                outcome.isDraw() ? null : outcome.getWinningLobbyPlayer().getName(),
+                                outcome.getLastTurnNumber(),
+                                outcome.isDraw()
+                            );
+                        }
 
                         synchronized (result) {
-                            if (outcome.isDraw()) {
+                            if (gameResult.isDraw) {
                                 result.draws++;
                                 synchronized (this) {
                                     totalDraws++;
                                     totalGamesPlayed++;
                                 }
-                            } else if (outcome.getWinningLobbyPlayer().getName().equals("Input Deck")) {
+                            } else if ("Input Deck".equals(gameResult.winner)) {
                                 result.wins++;
                                 synchronized (this) {
                                     totalWins++;
@@ -260,7 +287,7 @@ public class DeckTester {
                                 }
                             }
 
-                            result.totalTurns += outcome.getLastTurnNumber();
+                            result.totalTurns += gameResult.turns;
                         }
 
                     } catch (TimeoutException e) {
@@ -379,7 +406,240 @@ public class DeckTester {
 
 
     /**
-     * Play a single game between two decks.
+     * Simple result structure for game outcomes.
+     */
+    private static class SimpleGameResult {
+        final String winner;  // "Input Deck", "Opponent 1", or null for draw
+        final int turns;
+        final boolean isDraw;
+
+        SimpleGameResult(String winner, int turns, boolean isDraw) {
+            this.winner = winner;
+            this.turns = turns;
+            this.isDraw = isDraw;
+        }
+    }
+
+    /**
+     * Play a single game between two decks using a separate process for true parallelism.
+     * @throws TimeoutException if the game times out
+     */
+    private SimpleGameResult playGameInProcess(Deck deck1, Deck deck2) throws TimeoutException, IOException, InterruptedException {
+        // Save decks to temporary files
+        File tempDir = new File(System.getProperty("java.io.tmpdir"), "forge-deck-tester");
+        tempDir.mkdirs();
+
+        File deck1File = File.createTempFile("deck1-", ".dck", tempDir);
+        File deck2File = File.createTempFile("deck2-", ".dck", tempDir);
+
+        try {
+            // Write decks to temp files
+            DeckSerializer.writeDeck(deck1, deck1File);
+            DeckSerializer.writeDeck(deck2, deck2File);
+
+            // Build command to run worker process
+            String javaHome = System.getProperty("java.home");
+            String javaBin = javaHome + File.separator + "bin" + File.separator + "java";
+
+            // Get the jar file location
+            String jarPath = new File(DeckTester.class.getProtectionDomain()
+                .getCodeSource()
+                .getLocation()
+                .toURI()).getPath();
+
+            List<String> command = Arrays.asList(
+                javaBin,
+                "-jar", jarPath,
+                "--worker",
+                "--deck1", deck1File.getAbsolutePath(),
+                "--deck2", deck2File.getAbsolutePath(),
+                "--ai-profile", aiProfile,
+                "--commander-opponents", String.valueOf(commanderOpponents)
+            );
+
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(false); // Keep stderr separate for debugging
+
+            Process process = pb.start();
+
+            // Read output in parallel and parse progress updates
+            StringBuilder stdout = new StringBuilder();
+            StringBuilder stderr = new StringBuilder();
+
+            // Create game state for live display
+            String gameId = Thread.currentThread().getName();
+            GameState gameState = new GameState();
+            gameState.opponentName = deck2.getName();
+            boolean isCommander = isCommanderDeck(deck1) || isCommanderDeck(deck2);
+            int numPlayers = isCommander ? commanderOpponents + 1 : 2;
+            gameState.isCommander = isCommander;
+            gameState.numPlayers = numPlayers;
+            activeGames.put(gameId, gameState);
+
+            Thread stdoutReader = new Thread(() -> {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        stdout.append(line).append("\n");
+
+                        // Parse progress updates
+                        if (line.startsWith("PROGRESS:")) {
+                            parseProgressUpdate(line, gameState);
+                        }
+                    }
+                } catch (IOException e) {
+                    // Ignore
+                } finally {
+                    activeGames.remove(gameId);
+                }
+            });
+
+            Thread stderrReader = new Thread(() -> {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        stderr.append(line).append("\n");
+                    }
+                } catch (IOException e) {
+                    // Ignore
+                }
+            });
+
+            stdoutReader.start();
+            stderrReader.start();
+
+            // Wait for process with timeout
+            int timeoutSeconds = getGameTimeout(numPlayers);
+
+            boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+
+            // Wait for readers to finish
+            stdoutReader.join(1000);
+            stderrReader.join(1000);
+
+            if (!finished) {
+                process.destroyForcibly();
+                throw new TimeoutException("Worker process timed out");
+            }
+
+            int exitCode = process.exitValue();
+            if (exitCode != 0) {
+                throw new RuntimeException("Worker process failed with exit code " + exitCode +
+                    "\nStdout: " + stdout.toString() +
+                    "\nStderr: " + stderr.toString());
+            }
+
+            // Parse result from output
+            return parseGameResult(stdout.toString());
+
+        } catch (java.net.URISyntaxException e) {
+            throw new IOException("Failed to get jar path", e);
+        } finally {
+            deck1File.delete();
+            deck2File.delete();
+        }
+    }
+
+    /**
+     * Parse progress update from worker process.
+     * Format: PROGRESS:turn=X|active=Name|phase=Phase|lives=20:15:30|names=Input Deck:Opponent 1:Opponent 2
+     */
+    private void parseProgressUpdate(String line, GameState state) {
+        try {
+            String data = line.substring(9); // Remove "PROGRESS:"
+            String[] parts = data.split("\\|");
+
+            for (String part : parts) {
+                String[] kv = part.split("=", 2);
+                if (kv.length != 2) continue;
+
+                switch (kv[0]) {
+                    case "turn":
+                        state.turn = Integer.parseInt(kv[1]);
+                        break;
+                    case "active":
+                        state.activePlayerName = kv[1];
+                        break;
+                    case "phase":
+                        state.phase = kv[1];
+                        break;
+                    case "lives":
+                        state.playerLives.clear();
+                        String[] lives = kv[1].split(":");
+                        for (String life : lives) {
+                            state.playerLives.add(Integer.parseInt(life));
+                        }
+                        break;
+                    case "names":
+                        state.playerNames.clear();
+                        String[] names = kv[1].split(":");
+                        for (String name : names) {
+                            state.playerNames.add(name);
+                        }
+                        break;
+                }
+            }
+        } catch (Exception e) {
+            // Ignore malformed progress updates
+        }
+    }
+
+    /**
+     * Parse game result from worker process output.
+     */
+    private SimpleGameResult parseGameResult(String output) {
+        // Look for result line: "RESULT:winner=Input Deck,turns=15,draw=false"
+        for (String line : output.split("\n")) {
+            if (line.startsWith("RESULT:")) {
+                String[] parts = line.substring(7).split(",");
+                String winner = null;
+                int turns = 0;
+                boolean isDraw = false;
+
+                for (String part : parts) {
+                    String[] kv = part.split("=");
+                    if (kv.length == 2) {
+                        switch (kv[0]) {
+                            case "winner":
+                                winner = kv[1].equals("null") ? null : kv[1];
+                                break;
+                            case "turns":
+                                turns = Integer.parseInt(kv[1]);
+                                break;
+                            case "draw":
+                                isDraw = Boolean.parseBoolean(kv[1]);
+                                break;
+                        }
+                    }
+                }
+
+                return new SimpleGameResult(winner, turns, isDraw);
+            }
+        }
+
+        throw new RuntimeException("Failed to parse game result from worker process:\n" + output);
+    }
+
+    /**
+     * Play a single game directly (used by worker mode).
+     * Always enables monitoring if progressOut is set.
+     */
+    public GameOutcome playGameDirect(Deck deck1, Deck deck2) throws TimeoutException {
+        // Enable monitoring temporarily if we have a progress output stream
+        boolean oldShowLiveProgress = showLiveProgress;
+        if (progressOut != null) {
+            showLiveProgress = true; // Force monitoring for progress output
+        }
+
+        try {
+            return playGame(deck1, deck2);
+        } finally {
+            showLiveProgress = oldShowLiveProgress;
+        }
+    }
+
+    /**
+     * Play a single game between two decks (in-process version).
      * @throws TimeoutException if the game times out
      */
     private GameOutcome playGame(Deck deck1, Deck deck2) throws TimeoutException {
@@ -494,6 +754,32 @@ public class DeckTester {
     }
 
     /**
+     * Output progress to worker process stdout.
+     */
+    private void outputProgress(GameState state) {
+        if (progressOut == null) return;
+
+        // Format: PROGRESS:turn=X|active=Name|phase=Phase|lives=20:15:30:25|names=Input Deck:Opponent 1:Opponent 2
+        StringBuilder progress = new StringBuilder("PROGRESS:");
+        progress.append("turn=").append(state.turn);
+        progress.append("|active=").append(state.activePlayerName);
+        progress.append("|phase=").append(state.phase);
+        progress.append("|lives=");
+        for (int i = 0; i < state.playerLives.size(); i++) {
+            if (i > 0) progress.append(":");
+            progress.append(state.playerLives.get(i));
+        }
+        progress.append("|names=");
+        for (int i = 0; i < state.playerNames.size(); i++) {
+            if (i > 0) progress.append(":");
+            progress.append(state.playerNames.get(i));
+        }
+
+        progressOut.println(progress.toString());
+        progressOut.flush();
+    }
+
+    /**
      * Monitor game progress and update shared state for unified display.
      */
     private void monitorGameProgress(Game game, String deck1Name, String deck2Name, boolean isCommander) {
@@ -515,14 +801,27 @@ public class DeckTester {
 
         activeGames.put(gameId, state);
 
+        // Output initial progress if in worker mode
+        if (progressOut != null) {
+            outputProgress(state);
+        }
+
         try {
+            String lastPhase = "Starting";
             while (!game.isGameOver()) {
                 try {
-                    Thread.sleep(100); // Check every 100ms
+                    Thread.sleep(50); // Check every 50ms
 
                     int currentTurn = game.getPhaseHandler().getTurn();
                     String currentPhase = game.getPhaseHandler().getPhase() != null ?
                         game.getPhaseHandler().getPhase().toString() : "Starting";
+
+                    // Only update if phase changed
+                    boolean phaseChanged = !currentPhase.equals(lastPhase);
+                    if (!phaseChanged) {
+                        continue;
+                    }
+                    lastPhase = currentPhase;
 
                     // Get active player
                     Player activePlayer = game.getPhaseHandler().getPlayerTurn();
@@ -544,6 +843,11 @@ public class DeckTester {
                         if (players.get(i).getName().equals("Input Deck")) {
                             inputDeckPlayer = players.get(i);
                         }
+                    }
+
+                    // Output progress if worker mode (on every phase change)
+                    if (progressOut != null) {
+                        outputProgress(state);
                     }
 
                     // Early exit optimization: End game immediately if Input Deck has lost
@@ -572,10 +876,14 @@ public class DeckTester {
     private void startUnifiedDisplay() {
         displayRunning = true;
         displayThread = new Thread(() -> {
+            // Clear screen once at start
+            directOut.print("\033[2J\033[H");
+            directOut.flush();
+
             while (displayRunning) {
                 try {
-                    // Clear screen and move to top
-                    directOut.print("\033[2J\033[H");
+                    // Move cursor to top instead of clearing (reduces flicker)
+                    directOut.print("\033[H");
 
                     // Build unified display
                     StringBuilder display = new StringBuilder();
@@ -666,12 +974,15 @@ public class DeckTester {
 
                     display.append("╚══════════════════════════════════════════════════════════════════════╝\n");
 
+                    // Clear from cursor to end of screen to remove remnants
+                    display.append("\033[J");
+
                     // Print the display
                     directOut.print(display.toString());
                     directOut.flush();
 
-                    // Update every 300ms (reduced frequency for better performance)
-                    Thread.sleep(300);
+                    // Update every 500ms (reduces flicker further)
+                    Thread.sleep(500);
                 } catch (InterruptedException e) {
                     break;
                 } catch (Exception e) {
