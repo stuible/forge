@@ -666,8 +666,8 @@ public class DeckTester {
                     directOut.print(display.toString());
                     directOut.flush();
 
-                    // Update every 200ms
-                    Thread.sleep(200);
+                    // Update every 300ms (reduced frequency for better performance)
+                    Thread.sleep(300);
                 } catch (InterruptedException e) {
                     break;
                 } catch (Exception e) {
