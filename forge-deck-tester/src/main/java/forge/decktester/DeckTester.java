@@ -433,6 +433,9 @@ public class DeckTester {
                 match.startGame(game);
                 return null;
             });
+        // Performance optimization: reduce AI decision timeout from 5s to 3s
+        game.AI_TIMEOUT = 3;
+        game.AI_CAN_USE_TIMEOUT = true;
 
             // Monitor game progress in real-time (in a separate thread)
             Thread monitorThread = new Thread(() -> monitorGameProgress(game, deck1.getName(), deck2.getName(), isCommander));
