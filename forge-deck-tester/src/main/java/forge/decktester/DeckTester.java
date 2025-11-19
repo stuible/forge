@@ -45,7 +45,7 @@ public class DeckTester {
     private String aiProfile = "Default";
     private boolean showLiveProgress = false;
     private volatile boolean cancelled = false;
-    private int baseGameTimeoutSeconds = 150; // Base timeout for 2-player games
+    private int baseGameTimeoutSeconds = 300; // Base timeout for 2-player games (doubled from 150)
     private int commanderOpponents = 1; // Number of AI opponents in Commander games (1-4)
 
     // Live stats tracking
@@ -55,6 +55,7 @@ public class DeckTester {
     private volatile int totalDraws = 0;
     private volatile int totalErrors = 0;
     private volatile int totalGamesExpected = 0;
+    private volatile String testDeckName = "";
 
     // Direct output stream for live display (bypasses filters)
     private PrintStream directOut = System.out;
@@ -212,8 +213,9 @@ public class DeckTester {
         totalGamesExpected = opponentDecks.size() * gamesPerMatchup;
         activeGames.clear();
         cancelled = false;
+        testDeckName = testDeck.getName();
 
-        System.out.printf("%nTesting deck: %s%n", testDeck.getName());
+        System.out.printf("%nTesting deck: %s%n", testDeckName);
         System.out.printf("Against %d opponent decks, %d games each (%d total games)%n%n",
                 opponentDecks.size(), gamesPerMatchup, totalGamesExpected);
 
@@ -893,6 +895,9 @@ public class DeckTester {
                     display.append("║                     LIVE TESTING DASHBOARD                           ║\n");
                     display.append("╚══════════════════════════════════════════════════════════════════════╝\n\n");
 
+                    // Deck name
+                    display.append(String.format("  DECK:       %s\n\n", testDeckName));
+
                     // Overall stats
                     int validGames = totalGamesPlayed - totalErrors;
                     double winRate = validGames > 0 ? (totalWins * 100.0 / validGames) : 0;
@@ -922,8 +927,6 @@ public class DeckTester {
                     if (activeGames.isEmpty()) {
                         display.append("  No games currently running...\n\n");
                     } else {
-                        display.append("  ACTIVE GAMES:\n\n");
-
                         int gameNum = 1;
                         for (Map.Entry<String, GameState> entry : activeGames.entrySet()) {
                             GameState state = entry.getValue();
@@ -986,11 +989,11 @@ public class DeckTester {
 
                     display.append("╚══════════════════════════════════════════════════════════════════════╝\n");
 
-                    // Clear from cursor to end of screen to remove remnants
-                    display.append("\033[J");
-
                     // Print the display
                     directOut.print(display.toString());
+
+                    // Clear from cursor to end of screen to remove remnants (done after print)
+                    directOut.print("\033[J");
                     directOut.flush();
 
                     // Update every 500ms (reduces flicker further)
