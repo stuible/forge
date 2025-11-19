@@ -37,6 +37,7 @@ import java.util.stream.Collectors;
 public class DeckTester {
     private static final int DEFAULT_GAMES_PER_MATCHUP = 1000;
     private static final int THREAD_POOL_SIZE = Runtime.getRuntime().availableProcessors();
+    private static final boolean USE_PROCESS_PARALLELISM = true; // Use separate processes for true parallelism
 
     private final ExecutorService executor;
     private final Map<String, TestResults> resultsCache;
@@ -44,7 +45,7 @@ public class DeckTester {
     private String aiProfile = "Default";
     private boolean showLiveProgress = false;
     private volatile boolean cancelled = false;
-    private int baseGameTimeoutSeconds = 120; // Base timeout for 2-player games
+    private int baseGameTimeoutSeconds = 150; // Base timeout for 2-player games
     private int commanderOpponents = 1; // Number of AI opponents in Commander games (1-4)
 
     // Live stats tracking
