@@ -312,28 +312,60 @@ public class DeckTester {
         }
 
         // Print final results for each matchup
-        for (Deck opponent : opponentDecks) {
-            MatchupResult result = matchupResults.get(opponent.getName());
-            synchronized (System.out) {
-                if (result.errors > 0) {
-                    System.out.printf("vs %s: %d-%d-%d-%d (%.1f%% winrate, %d errors)%n",
-                            opponent.getName(),
-                            result.wins,
-                            result.losses,
-                            result.draws,
-                            result.errors,
-                            result.getWinRate() * 100,
-                            result.errors);
-                } else {
-                    System.out.printf("vs %s: %d-%d-%d (%.1f%% winrate)%n",
-                            opponent.getName(),
-                            result.wins,
-                            result.losses,
-                            result.draws,
-                            result.getWinRate() * 100);
-                }
+        boolean isCommanderMultiplayer = (isCommanderDeck(testDeck) && commanderOpponents > 1);
+
+        if (isCommanderMultiplayer) {
+            // For multiplayer Commander, show aggregated results
+            System.out.println("\nMultiplayer Commander Results (pods with " + (commanderOpponents + 1) + " players):");
+            int totalWinsAll = 0, totalLossesAll = 0, totalDrawsAll = 0, totalErrorsAll = 0;
+
+            for (Deck opponent : opponentDecks) {
+                MatchupResult result = matchupResults.get(opponent.getName());
+                totalWinsAll += result.wins;
+                totalLossesAll += result.losses;
+                totalDrawsAll += result.draws;
+                totalErrorsAll += result.errors;
+                results.put(opponent.getName(), result);
             }
-            results.put(opponent.getName(), result);
+
+            synchronized (System.out) {
+                if (totalErrorsAll > 0) {
+                    System.out.printf("Overall: %d-%d-%d-%d (%.1f%% winrate, %d errors)%n",
+                            totalWinsAll, totalLossesAll, totalDrawsAll, totalErrorsAll,
+                            totalWinsAll + totalLossesAll > 0 ? (totalWinsAll * 100.0 / (totalWinsAll + totalLossesAll)) : 0,
+                            totalErrorsAll);
+                } else {
+                    System.out.printf("Overall: %d-%d-%d (%.1f%% winrate)%n",
+                            totalWinsAll, totalLossesAll, totalDrawsAll,
+                            totalWinsAll + totalLossesAll > 0 ? (totalWinsAll * 100.0 / (totalWinsAll + totalLossesAll)) : 0);
+                }
+                System.out.println("Note: In multiplayer Commander, you played against various opponent deck combinations.");
+            }
+        } else {
+            // For 1v1, show per-matchup results
+            for (Deck opponent : opponentDecks) {
+                MatchupResult result = matchupResults.get(opponent.getName());
+                synchronized (System.out) {
+                    if (result.errors > 0) {
+                        System.out.printf("vs %s: %d-%d-%d-%d (%.1f%% winrate, %d errors)%n",
+                                opponent.getName(),
+                                result.wins,
+                                result.losses,
+                                result.draws,
+                                result.errors,
+                                result.getWinRate() * 100,
+                                result.errors);
+                    } else {
+                        System.out.printf("vs %s: %d-%d-%d (%.1f%% winrate)%n",
+                                opponent.getName(),
+                                result.wins,
+                                result.losses,
+                                result.draws,
+                                result.getWinRate() * 100);
+                    }
+                }
+                results.put(opponent.getName(), result);
+            }
         }
 
         // Stop unified display
@@ -554,7 +586,7 @@ public class DeckTester {
                     double winRate = validGames > 0 ? (totalWins * 100.0 / validGames) : 0;
                     double progressPercent = totalGamesExpected > 0 ? (totalGamesPlayed * 100.0 / totalGamesExpected) : 0;
 
-                    display.append(String.format("  OVERALL RECORD:     %3d-%3d-%3d  (%5.1f%% Win Rate)\n",
+                    display.append(String.format("  OVERALL RECORD:     W:%3d / L:%3d / T:%3d  (%5.1f%% Win Rate)\n",
                         totalWins, totalLosses, totalDraws, winRate));
                     display.append(String.format("  ERRORS:             %3d  (timeouts/crashes)\n", totalErrors));
                     display.append(String.format("  PROGRESS:           %3d / %3d games  (%5.1f%% complete)\n",
