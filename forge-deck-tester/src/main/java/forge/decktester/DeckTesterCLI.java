@@ -73,12 +73,27 @@ public class DeckTesterCLI {
             // Enable live progress reporting to stdout
             tester.setProgressOutputStream(originalOut);
 
-            // Load both decks
-            Deck deck1 = tester.loadDeck(options.deck1Path);
-            Deck deck2 = tester.loadDeck(options.deck2Path);
+            // Load input deck
+            Deck inputDeck = tester.loadDeck(options.deck1Path);
 
-            // Run the game (in-process, but this whole process is isolated)
-            forge.game.GameOutcome outcome = tester.playGameDirect(deck1, deck2);
+            // Load all opponent decks
+            List<Deck> opponentDecks = new ArrayList<>();
+            if (options.opponentDeckPaths != null && !options.opponentDeckPaths.isEmpty()) {
+                for (String path : options.opponentDeckPaths) {
+                    opponentDecks.add(tester.loadDeck(path));
+                }
+            } else if (options.deck2Path != null) {
+                // Backward compatibility: single deck2 path
+                opponentDecks.add(tester.loadDeck(options.deck2Path));
+            }
+
+            // Run the game (multiplayer if multiple opponents)
+            forge.game.GameOutcome outcome;
+            if (opponentDecks.size() == 1) {
+                outcome = tester.playGameDirect(inputDeck, opponentDecks.get(0));
+            } else {
+                outcome = tester.playGameMultiplayerDirect(inputDeck, opponentDecks);
+            }
 
             // Restore stdout only for result output
             System.setOut(originalOut);
@@ -519,8 +534,13 @@ public class DeckTesterCLI {
                 durationSeconds / 3600,
                 (durationSeconds % 3600) / 60,
                 durationSeconds % 60);
-        System.out.printf("Games per Second:     %.2f%n",
-                (double) totalGames / durationSeconds);
+
+        double gamesPerMinute = (double) totalGames / durationSeconds * 60;
+        double avgSecondsPerGame = totalGames > 0 ? (double) durationSeconds / totalGames : 0;
+
+        System.out.printf("Games Simulated:      %d games%n", totalGames);
+        System.out.printf("Simulation Rate:      %.1f games/min (%.0f sec/game)%n",
+                gamesPerMinute, avgSecondsPerGame);
         System.out.printf("Matchups Tested:      %d%n", results.matchups.size());
 
         System.out.println("\n" + "=".repeat(80) + "\n");
@@ -680,6 +700,13 @@ public class DeckTesterCLI {
                     options.deck2Path = args[++i];
                     break;
 
+                case "--opponent-deck":
+                    if (i + 1 >= args.length) {
+                        throw new IllegalArgumentException("Missing deck path after " + arg);
+                    }
+                    options.opponentDeckPaths.add(args[++i]);
+                    break;
+
                 default:
                     throw new IllegalArgumentException("Unknown option: " + arg);
             }
@@ -803,6 +830,7 @@ public class DeckTesterCLI {
         boolean workerMode = false;
         String deck1Path = null;
         String deck2Path = null;
+        List<String> opponentDeckPaths = new ArrayList<>();
     }
 
     /**

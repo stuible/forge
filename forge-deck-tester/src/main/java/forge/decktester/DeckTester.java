@@ -258,11 +258,10 @@ public class DeckTester {
                         }
 
                         if (USE_PROCESS_PARALLELISM) {
-                            // Use separate process for true parallelism
-                            // For now, just pass first opponent (process mode needs update for multiplayer)
-                            gameResult = playGameInProcess(testDeck, opponents.get(0));
+                            // Use separate process for true parallelism (supports multiplayer)
+                            gameResult = playGameInProcess(testDeck, opponents);
                         } else {
-                            // Use in-process execution (limited by Forge's internal locks)
+                            // Use in-process execution
                             GameOutcome outcome = playGameMultiplayer(testDeck, opponents);
                             gameResult = new SimpleGameResult(
                                 outcome.isDraw() ? null : outcome.getWinningLobbyPlayer().getName(),
@@ -425,21 +424,29 @@ public class DeckTester {
     }
 
     /**
-     * Play a single game between two decks using a separate process for true parallelism.
+     * Play a game using a separate process for true parallelism (supports multiplayer).
+     * @param inputDeck The deck being tested
+     * @param opponentDecks List of opponent decks (1 or more for multiplayer)
      * @throws TimeoutException if the game times out
      */
-    private SimpleGameResult playGameInProcess(Deck deck1, Deck deck2) throws TimeoutException, IOException, InterruptedException {
+    private SimpleGameResult playGameInProcess(Deck inputDeck, List<Deck> opponentDecks) throws TimeoutException, IOException, InterruptedException {
         // Save decks to temporary files
         File tempDir = new File(System.getProperty("java.io.tmpdir"), "forge-deck-tester");
         tempDir.mkdirs();
 
-        File deck1File = File.createTempFile("deck1-", ".dck", tempDir);
-        File deck2File = File.createTempFile("deck2-", ".dck", tempDir);
+        File inputDeckFile = File.createTempFile("input-", ".dck", tempDir);
+        List<File> opponentDeckFiles = new ArrayList<>();
 
         try {
-            // Write decks to temp files
-            DeckSerializer.writeDeck(deck1, deck1File);
-            DeckSerializer.writeDeck(deck2, deck2File);
+            // Write input deck
+            DeckSerializer.writeDeck(inputDeck, inputDeckFile);
+
+            // Write all opponent decks
+            for (int i = 0; i < opponentDecks.size(); i++) {
+                File oppFile = File.createTempFile("opp" + (i + 1) + "-", ".dck", tempDir);
+                DeckSerializer.writeDeck(opponentDecks.get(i), oppFile);
+                opponentDeckFiles.add(oppFile);
+            }
 
             // Build command to run worker process
             String javaHome = System.getProperty("java.home");
@@ -451,15 +458,19 @@ public class DeckTester {
                 .getLocation()
                 .toURI()).getPath();
 
-            List<String> command = Arrays.asList(
+            List<String> command = new ArrayList<>(Arrays.asList(
                 javaBin,
                 "-jar", jarPath,
                 "--worker",
-                "--deck1", deck1File.getAbsolutePath(),
-                "--deck2", deck2File.getAbsolutePath(),
-                "--ai-profile", aiProfile,
-                "--commander-opponents", String.valueOf(commanderOpponents)
-            );
+                "--deck1", inputDeckFile.getAbsolutePath(),
+                "--ai-profile", aiProfile
+            ));
+
+            // Add all opponent deck paths
+            for (File oppFile : opponentDeckFiles) {
+                command.add("--opponent-deck");
+                command.add(oppFile.getAbsolutePath());
+            }
 
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.redirectErrorStream(false); // Keep stderr separate for debugging
@@ -473,9 +484,9 @@ public class DeckTester {
             // Create game state for live display
             String gameId = Thread.currentThread().getName();
             GameState gameState = new GameState();
-            gameState.opponentName = deck2.getName();
-            boolean isCommander = isCommanderDeck(deck1) || isCommanderDeck(deck2);
-            int numPlayers = isCommander ? commanderOpponents + 1 : 2;
+            gameState.opponentName = opponentDecks.size() > 1 ? "Multiplayer" : opponentDecks.get(0).getName();
+            boolean isCommander = isCommanderDeck(inputDeck) || (opponentDecks.size() > 0 && isCommanderDeck(opponentDecks.get(0)));
+            int numPlayers = opponentDecks.size() + 1;
             gameState.isCommander = isCommander;
             gameState.numPlayers = numPlayers;
             activeGames.put(gameId, gameState);
@@ -539,8 +550,10 @@ public class DeckTester {
         } catch (java.net.URISyntaxException e) {
             throw new IOException("Failed to get jar path", e);
         } finally {
-            deck1File.delete();
-            deck2File.delete();
+            inputDeckFile.delete();
+            for (File oppFile : opponentDeckFiles) {
+                oppFile.delete();
+            }
         }
     }
 
@@ -637,6 +650,24 @@ public class DeckTester {
 
         try {
             return playGame(deck1, deck2);
+        } finally {
+            showLiveProgress = oldShowLiveProgress;
+        }
+    }
+
+    /**
+     * Play a multiplayer game directly (used by worker mode).
+     * Always enables monitoring if progressOut is set.
+     */
+    public GameOutcome playGameMultiplayerDirect(Deck inputDeck, List<Deck> opponentDecks) throws TimeoutException {
+        // Enable monitoring temporarily if we have a progress output stream
+        boolean oldShowLiveProgress = showLiveProgress;
+        if (progressOut != null) {
+            showLiveProgress = true; // Force monitoring for progress output
+        }
+
+        try {
+            return playGameMultiplayer(inputDeck, opponentDecks);
         } finally {
             showLiveProgress = oldShowLiveProgress;
         }
