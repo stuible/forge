@@ -1056,9 +1056,8 @@ public class DeckTester {
                     // Move cursor to top (no full clear to reduce flicker)
                     directOut.print("\033[H");
 
-                    // Build unified display with fixed-width lines to prevent remnants
+                    // Build unified display
                     StringBuilder display = new StringBuilder();
-                    final int LINE_WIDTH = 78; // Width of content area inside box
 
                     // Header
                     display.append("╔══════════════════════════════════════════════════════════════════════╗\n");
@@ -1159,13 +1158,11 @@ public class DeckTester {
 
                     display.append("╚══════════════════════════════════════════════════════════════════════╝\n");
 
-                    // Add blank lines to clear any remnants below
-                    for (int i = 0; i < 5; i++) {
-                        display.append(padLine("", LINE_WIDTH)).append("\n");
-                    }
-
                     // Print the display
                     directOut.print(display.toString());
+
+                    // Clear to end of screen to remove any remnants below
+                    directOut.print("\033[J");
                     directOut.flush();
 
                     // Update every 500ms
