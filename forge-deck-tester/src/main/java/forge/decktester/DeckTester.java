@@ -1,5 +1,6 @@
 package forge.decktester;
 
+import forge.card.ColorSet;
 import forge.deck.Deck;
 import forge.deck.DeckSection;
 import forge.deck.io.DeckSerializer;
@@ -45,9 +46,8 @@ public class DeckTester {
     private String aiProfile = "Default";
     private boolean showLiveProgress = false;
     private volatile boolean cancelled = false;
-    private int baseGameTimeoutSeconds = 300; // Base timeout for 2-player games (doubled from 150)
     private int commanderOpponents = 1; // Number of AI opponents in Commander games (1-4)
-
+  
     // Live stats tracking
     private volatile int totalGamesPlayed = 0;
     private volatile int totalWins = 0;
@@ -105,23 +105,6 @@ public class DeckTester {
      */
     public void setShowLiveProgress(boolean show) {
         this.showLiveProgress = show;
-    }
-
-    /**
-     * Set the base timeout for individual games (in seconds).
-     * Actual timeout scales with player count for multiplayer games.
-     */
-    public void setGameTimeout(int timeoutSeconds) {
-        this.baseGameTimeoutSeconds = timeoutSeconds;
-    }
-
-    /**
-     * Calculate timeout based on number of players.
-     * Multiplayer games take longer, so scale timeout accordingly.
-     */
-    private int getGameTimeout(int numPlayers) {
-        // Base timeout * player count (4-player games get 4x timeout)
-        return baseGameTimeoutSeconds * numPlayers;
     }
 
     /**
@@ -233,10 +216,13 @@ public class DeckTester {
         // Create matchup results tracking
         Map<String, MatchupResult> matchupResults = new ConcurrentHashMap<>();
         for (Deck opponent : opponentDecks) {
-            matchupResults.put(opponent.getName(), new MatchupResult(testDeck.getName(), opponent.getName()));
+            MatchupResult result = new MatchupResult(testDeck.getName(), opponent.getName());
             // Set number of players for each matchup
             boolean isCommander = isCommanderDeck(testDeck) || isCommanderDeck(opponent);
-            matchupResults.get(opponent.getName()).numPlayers = isCommander ? commanderOpponents + 1 : 2;
+            result.numPlayers = isCommander ? commanderOpponents + 1 : 2;
+            // Set color identity for grouping (useful for multiplayer analysis)
+            result.opponentColorIdentity = getDeckColorIdentity(opponent);
+            matchupResults.put(opponent.getName(), result);
         }
 
         // Submit all individual games to thread pool (not matchups)
@@ -295,8 +281,7 @@ public class DeckTester {
                     } catch (TimeoutException e) {
                         boolean isCmd = isCommanderDeck(testDeck) || isCommanderDeck(oppDeck);
                         int players = isCmd ? commanderOpponents + 1 : 2;
-                        int timeout = getGameTimeout(players);
-                        System.err.println("Game vs " + oppDeck.getName() + " (" + players + " players) timed out after " + timeout + " seconds");
+                        System.err.println("Game vs " + oppDeck.getName() + " (" + players + " players) timed out (phase timeout)");
                         synchronized (result) {
                             result.errors++;
                             synchronized (this) {
@@ -510,8 +495,8 @@ public class DeckTester {
             stdoutReader.start();
             stderrReader.start();
 
-            // Wait for process with timeout
-            int timeoutSeconds = getGameTimeout(numPlayers);
+            // Wait for process with timeout (generous backstop - per-phase timeout handles most issues)
+            int timeoutSeconds = 3600; // 1 hour
 
             boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
 
@@ -648,7 +633,8 @@ public class DeckTester {
         // Detect format first
         boolean isCommander = isCommanderDeck(deck1) || isCommanderDeck(deck2);
         int numPlayers = isCommander ? commanderOpponents + 1 : 2;
-        final int gameTimeoutSeconds = getGameTimeout(numPlayers);
+        // Backstop timeout (very generous since per-phase timeout catches issues faster)
+        final int gameTimeoutSeconds = 3600; // 1 hour max per game
 
         // Create players with specified AI profile
         List<RegisteredPlayer> players = new ArrayList<>();
@@ -810,6 +796,9 @@ public class DeckTester {
 
         try {
             String lastPhase = "Starting";
+            long phaseStartTime = System.currentTimeMillis();
+            final long PHASE_TIMEOUT_MS = 120000; // 2 minutes per phase
+
             while (!game.isGameOver()) {
                 try {
                     Thread.sleep(50); // Check every 50ms
@@ -818,12 +807,22 @@ public class DeckTester {
                     String currentPhase = game.getPhaseHandler().getPhase() != null ?
                         game.getPhaseHandler().getPhase().toString() : "Starting";
 
+                    // Check for phase timeout (phase stuck for 2+ minutes)
+                    long phaseElapsed = System.currentTimeMillis() - phaseStartTime;
+                    if (phaseElapsed > PHASE_TIMEOUT_MS) {
+                        System.err.println("Phase timeout detected: " + lastPhase + " exceeded " +
+                            (PHASE_TIMEOUT_MS / 1000) + "s at turn " + currentTurn);
+                        throw new TimeoutException("Phase " + lastPhase + " timed out after " +
+                            (phaseElapsed / 1000) + " seconds");
+                    }
+
                     // Only update if phase changed
                     boolean phaseChanged = !currentPhase.equals(lastPhase);
                     if (!phaseChanged) {
                         continue;
                     }
                     lastPhase = currentPhase;
+                    phaseStartTime = System.currentTimeMillis(); // Reset timer on phase change
 
                     // Get active player
                     Player activePlayer = game.getPhaseHandler().getPlayerTurn();
@@ -1047,6 +1046,37 @@ public class DeckTester {
     }
 
     /**
+     * Get the color identity of a deck (for Commander format).
+     * Returns a string like "WUBRG", "UR", "G", "C" (colorless), etc.
+     */
+    public static String getDeckColorIdentity(Deck deck) {
+        byte colorBits = 0;
+
+        // Get color identity from all cards in the deck
+        for (PaperCard card : deck.getAllCardsInASinglePool().toFlatList()) {
+            ColorSet cardColorIdentity = card.getRules().getColorIdentity();
+            colorBits |= cardColorIdentity.getColor();
+        }
+
+        // Convert to ColorSet and get string representation
+        ColorSet deckColors = ColorSet.fromMask(colorBits);
+        if (deckColors == ColorSet.C) {
+            return "Colorless";
+        }
+
+        // Convert to readable format (e.g., "WU" -> "Azorius (WU)")
+        return getColorName(deckColors);
+    }
+
+    /**
+     * Get a friendly name for a color combination.
+     */
+    private static String getColorName(ColorSet colors) {
+        // Return the color letters (e.g., "WU", "WUBRG", "R", etc.)
+        return colors.toString();
+    }
+
+    /**
      * Load all decks from directory.
      */
     public List<Deck> loadDecksFromDirectory(String directory) throws IOException {
@@ -1093,6 +1123,7 @@ public class DeckTester {
     public static class MatchupResult {
         public final String deckName;
         public final String opponentName;
+        public String opponentColorIdentity = "Unknown"; // Color identity for grouping
         public int wins = 0;
         public int losses = 0;
         public int draws = 0;

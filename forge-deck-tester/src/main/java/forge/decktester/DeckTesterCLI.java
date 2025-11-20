@@ -392,40 +392,116 @@ public class DeckTesterCLI {
         System.out.printf("Total Errors:       %d (timeouts/crashes)%n", totalErrors);
         System.out.printf("Overall Win Rate:   %.2f%%%n%n", results.getOverallWinRate() * 100);
 
-        // Best matchups
-        System.out.println("BEST MATCHUPS (Top 10)");
-        System.out.println("-".repeat(80));
-        System.out.printf("%-40s %12s %10s %11s%n", "Opponent", "W-L-D-E", "Win Rate", "Avg Rounds");
-        System.out.println("-".repeat(80));
+        // Check if this is multiplayer Commander (3+ players)
+        boolean isMultiplayerCommander = results.matchups.values().stream()
+                .anyMatch(m -> m.numPlayers >= 3);
 
-        List<MatchupResult> bestMatchups = results.getBestMatchups(10);
-        for (MatchupResult matchup : bestMatchups) {
-            System.out.printf("%-40s %3d-%3d-%2d-%2d  %9.1f%%  %10.1f%n",
-                    truncate(matchup.opponentName, 40),
-                    matchup.wins,
-                    matchup.losses,
-                    matchup.draws,
-                    matchup.errors,
-                    matchup.getWinRate() * 100,
-                    matchup.getAverageRounds());
-        }
+        if (isMultiplayerCommander) {
+            // For multiplayer, group results by color identity
+            System.out.println("MULTIPLAYER PERFORMANCE ANALYSIS");
+            System.out.println("-".repeat(80));
 
-        // Worst matchups
-        System.out.println("\nWORST MATCHUPS (Bottom 10)");
-        System.out.println("-".repeat(80));
-        System.out.printf("%-40s %12s %10s %11s%n", "Opponent", "W-L-D-E", "Win Rate", "Avg Rounds");
-        System.out.println("-".repeat(80));
+            // Group by color identity
+            Map<String, ColorGroupStats> colorStats = new HashMap<>();
+            for (MatchupResult matchup : results.matchups.values()) {
+                String color = matchup.opponentColorIdentity;
+                colorStats.putIfAbsent(color, new ColorGroupStats());
+                ColorGroupStats stats = colorStats.get(color);
+                stats.wins += matchup.wins;
+                stats.losses += matchup.losses;
+                stats.draws += matchup.draws;
+                stats.errors += matchup.errors;
+                stats.totalTurns += matchup.totalTurns;
+                stats.totalGames += matchup.getTotalGames();
+            }
 
-        List<MatchupResult> worstMatchups = results.getWorstMatchups(10);
-        for (MatchupResult matchup : worstMatchups) {
-            System.out.printf("%-40s %3d-%3d-%2d-%2d  %9.1f%%  %10.1f%n",
-                    truncate(matchup.opponentName, 40),
-                    matchup.wins,
-                    matchup.losses,
-                    matchup.draws,
-                    matchup.errors,
-                    matchup.getWinRate() * 100,
-                    matchup.getAverageRounds());
+            // Show overall color presence
+            System.out.println("\nColor Identity Breakdown:");
+            System.out.printf("%-15s %8s %10s %11s %10s%n", "Colors", "Pods", "Win Rate", "Avg Rounds", "W-L-D-E");
+            System.out.println("-".repeat(80));
+            colorStats.entrySet().stream()
+                    .sorted((a, b) -> Integer.compare(b.getValue().totalGames, a.getValue().totalGames))
+                    .forEach(entry -> {
+                        ColorGroupStats stats = entry.getValue();
+                        System.out.printf("%-15s %8d  %9.1f%%  %10.1f  %3d-%3d-%2d-%2d%n",
+                                entry.getKey(),
+                                stats.totalGames,
+                                stats.getWinRate() * 100,
+                                stats.getAverageRounds(),
+                                stats.wins,
+                                stats.losses,
+                                stats.draws,
+                                stats.errors);
+                    });
+
+            // Show best matchups (colors you beat most often)
+            System.out.println("\nBest Matchups (Colors You Beat):");
+            System.out.printf("%-15s %10s %8s%n", "Colors", "Win Rate", "Sample");
+            System.out.println("-".repeat(80));
+            colorStats.entrySet().stream()
+                    .filter(e -> e.getValue().wins + e.getValue().losses >= 5) // Minimum sample
+                    .sorted((a, b) -> Double.compare(b.getValue().getWinRate(), a.getValue().getWinRate()))
+                    .limit(5)
+                    .forEach(entry -> {
+                        ColorGroupStats stats = entry.getValue();
+                        System.out.printf("%-15s %9.1f%%  %3d pods%n",
+                                entry.getKey(),
+                                stats.getWinRate() * 100,
+                                stats.wins + stats.losses);
+                    });
+
+            // Show worst matchups (colors that beat you most often)
+            System.out.println("\nWorst Matchups (Colors That Beat You):");
+            System.out.printf("%-15s %10s %8s%n", "Colors", "Win Rate", "Sample");
+            System.out.println("-".repeat(80));
+            colorStats.entrySet().stream()
+                    .filter(e -> e.getValue().wins + e.getValue().losses >= 5) // Minimum sample
+                    .sorted((a, b) -> Double.compare(a.getValue().getWinRate(), b.getValue().getWinRate()))
+                    .limit(5)
+                    .forEach(entry -> {
+                        ColorGroupStats stats = entry.getValue();
+                        System.out.printf("%-15s %9.1f%%  %3d pods%n",
+                                entry.getKey(),
+                                stats.getWinRate() * 100,
+                                stats.wins + stats.losses);
+                    });
+        } else {
+            // For 1v1, show individual matchups
+            // Best matchups
+            System.out.println("BEST MATCHUPS (Top 10)");
+            System.out.println("-".repeat(80));
+            System.out.printf("%-40s %12s %10s %11s%n", "Opponent", "W-L-D-E", "Win Rate", "Avg Rounds");
+            System.out.println("-".repeat(80));
+
+            List<MatchupResult> bestMatchups = results.getBestMatchups(10);
+            for (MatchupResult matchup : bestMatchups) {
+                System.out.printf("%-40s %3d-%3d-%2d-%2d  %9.1f%%  %10.1f%n",
+                        truncate(matchup.opponentName, 40),
+                        matchup.wins,
+                        matchup.losses,
+                        matchup.draws,
+                        matchup.errors,
+                        matchup.getWinRate() * 100,
+                        matchup.getAverageRounds());
+            }
+
+            // Worst matchups
+            System.out.println("\nWORST MATCHUPS (Bottom 10)");
+            System.out.println("-".repeat(80));
+            System.out.printf("%-40s %12s %10s %11s%n", "Opponent", "W-L-D-E", "Win Rate", "Avg Rounds");
+            System.out.println("-".repeat(80));
+
+            List<MatchupResult> worstMatchups = results.getWorstMatchups(10);
+            for (MatchupResult matchup : worstMatchups) {
+                System.out.printf("%-40s %3d-%3d-%2d-%2d  %9.1f%%  %10.1f%n",
+                        truncate(matchup.opponentName, 40),
+                        matchup.wins,
+                        matchup.losses,
+                        matchup.draws,
+                        matchup.errors,
+                        matchup.getWinRate() * 100,
+                        matchup.getAverageRounds());
+            }
         }
 
         // Performance metrics
@@ -720,4 +796,26 @@ public class DeckTesterCLI {
         String deck1Path = null;
         String deck2Path = null;
     }
+
+    /**
+     * Helper class for aggregating stats by color identity in multiplayer.
+     */
+    private static class ColorGroupStats {
+        int wins = 0;
+        int losses = 0;
+        int draws = 0;
+        int errors = 0;
+        long totalTurns = 0;
+        int totalGames = 0;
+
+        double getWinRate() {
+            int total = wins + losses;
+            return total > 0 ? (double) wins / total : 0.0;
+        }
+
+        double getAverageRounds() {
+            return totalGames > 0 ? (double) totalTurns / totalGames : 0.0;
+        }
+    }
+
 }
