@@ -1025,6 +1025,23 @@ public class DeckTester {
     }
 
     /**
+     * Pad a string to a fixed width to prevent remnants from previous content.
+     * Strips ANSI codes from length calculation.
+     */
+    private String padLine(String line, int width) {
+        // Remove ANSI escape codes for length calculation
+        String stripped = line.replaceAll("\033\\[[0-9;]*m", "");
+        int actualLength = stripped.length();
+
+        if (actualLength >= width) {
+            return line;
+        }
+
+        // Pad with spaces to fixed width
+        return line + " ".repeat(width - actualLength);
+    }
+
+    /**
      * Start the unified display thread that shows all active games.
      */
     private void startUnifiedDisplay() {
@@ -1036,11 +1053,12 @@ public class DeckTester {
 
             while (displayRunning) {
                 try {
-                    // Move cursor to top instead of clearing (reduces flicker)
+                    // Move cursor to top (no full clear to reduce flicker)
                     directOut.print("\033[H");
 
-                    // Build unified display
+                    // Build unified display with fixed-width lines to prevent remnants
                     StringBuilder display = new StringBuilder();
+                    final int LINE_WIDTH = 78; // Width of content area inside box
 
                     // Header
                     display.append("╔══════════════════════════════════════════════════════════════════════╗\n");
@@ -1141,14 +1159,16 @@ public class DeckTester {
 
                     display.append("╚══════════════════════════════════════════════════════════════════════╝\n");
 
+                    // Add blank lines to clear any remnants below
+                    for (int i = 0; i < 5; i++) {
+                        display.append(padLine("", LINE_WIDTH)).append("\n");
+                    }
+
                     // Print the display
                     directOut.print(display.toString());
-
-                    // Clear from cursor to end of screen to remove remnants (done after print)
-                    directOut.print("\033[J");
                     directOut.flush();
 
-                    // Update every 500ms (reduces flicker further)
+                    // Update every 500ms
                     Thread.sleep(500);
                 } catch (InterruptedException e) {
                     break;
