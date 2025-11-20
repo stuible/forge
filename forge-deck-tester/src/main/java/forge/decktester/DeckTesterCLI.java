@@ -540,7 +540,7 @@ public class DeckTesterCLI {
         double avgSecondsPerGame = totalGames > 0 ? (double) durationSeconds / totalGames : 0;
 
         System.out.printf("Games Simulated:      %d games%n", totalGames);
-        System.out.printf("Simulation Rate:      %.1f games/min (%.0f sec/game)%n",
+        System.out.printf("Simulation Rate:      %.1f games/min%n",
                 gamesPerMinute, avgSecondsPerGame);
         System.out.printf("Matchups Tested:      %d%n", results.matchups.size());
 
