@@ -390,7 +390,15 @@ public class DeckTesterCLI {
         System.out.printf("Total Draws:        %d (%.1f%%)%n", totalDraws,
                 validGames > 0 ? (double) totalDraws / validGames * 100 : 0);
         System.out.printf("Total Errors:       %d (timeouts/crashes)%n", totalErrors);
-        System.out.printf("Overall Win Rate:   %.2f%%%n%n", results.getOverallWinRate() * 100);
+        System.out.printf("Overall Win Rate:   %.2f%%%n", results.getOverallWinRate() * 100);
+
+        // Calculate average game length in rounds
+        double avgRounds = results.matchups.values().stream()
+                .filter(m -> m.getTotalGames() > 0)
+                .mapToDouble(MatchupResult::getAverageRounds)
+                .average()
+                .orElse(0.0);
+        System.out.printf("Avg Game Length:    %.1f rounds%n%n", avgRounds);
 
         // Check if this is multiplayer Commander (3+ players)
         boolean isMultiplayerCommander = results.matchups.values().stream()

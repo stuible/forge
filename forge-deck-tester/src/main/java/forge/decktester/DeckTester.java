@@ -661,19 +661,18 @@ public class DeckTester {
         final int gameTimeoutSeconds = 3600; // 1 hour max per game
 
         // Create players with specified AI profile
-        Set<AIOption> aiOptions = fastMode ? null : Set.of(AIOption.USE_SIMULATION);
         List<RegisteredPlayer> players = new ArrayList<>();
 
         // Add input deck
         RegisteredPlayer rp1 = isCommander ? RegisteredPlayer.forCommander(inputDeck) : new RegisteredPlayer(inputDeck);
-        rp1.setPlayer(GamePlayerUtil.createAiPlayer("Input Deck", 0, 0, aiOptions, aiProfile));
+        rp1.setPlayer(GamePlayerUtil.createAiPlayer("Input Deck", aiProfile));
         players.add(rp1);
 
         // Add all opponent decks
         for (int i = 0; i < opponentDecks.size(); i++) {
             Deck oppDeck = opponentDecks.get(i);
             RegisteredPlayer rp = isCommander ? RegisteredPlayer.forCommander(oppDeck) : new RegisteredPlayer(oppDeck);
-            rp.setPlayer(GamePlayerUtil.createAiPlayer("Opponent " + (i + 1), 0, 0, aiOptions, aiProfile));
+            rp.setPlayer(GamePlayerUtil.createAiPlayer("Opponent " + (i + 1), aiProfile));
             players.add(rp);
         }
 
