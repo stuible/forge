@@ -484,7 +484,21 @@ public class DeckTester {
             // Create game state for live display
             String gameId = Thread.currentThread().getName();
             GameState gameState = new GameState();
-            gameState.opponentName = opponentDecks.size() > 1 ? "Multiplayer" : opponentDecks.get(0).getName();
+
+            // Format opponent name for display
+            if (opponentDecks.size() == 1) {
+                gameState.opponentName = opponentDecks.get(0).getName();
+            } else {
+                // Multiplayer: show first deck + count of others
+                int othersCount = opponentDecks.size() - 1;
+                int totalPlayers = opponentDecks.size() + 1; // opponents + input deck
+                gameState.opponentName = String.format("%s + %d other%s (%d players)",
+                    opponentDecks.get(0).getName(),
+                    othersCount,
+                    othersCount == 1 ? "" : "s",
+                    totalPlayers);
+            }
+
             boolean isCommander = isCommanderDeck(inputDeck) || (opponentDecks.size() > 0 && isCommanderDeck(opponentDecks.get(0)));
             int numPlayers = opponentDecks.size() + 1;
             gameState.isCommander = isCommander;
