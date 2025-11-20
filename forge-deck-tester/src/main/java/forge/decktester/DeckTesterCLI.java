@@ -438,11 +438,12 @@ public class DeckTesterCLI {
                 stats.totalGames += matchup.getTotalGames();
             }
 
-            // Show overall color presence
+            // Show overall color presence (only colors actually faced)
             System.out.println("\nColor Identity Breakdown:");
             System.out.printf("%-15s %8s %10s %11s %10s%n", "Colors", "Pods", "Win Rate", "Avg Rounds", "W-L-D-E");
             System.out.println("-".repeat(80));
             colorStats.entrySet().stream()
+                    .filter(e -> e.getValue().totalGames > 0) // Only show colors actually faced
                     .sorted((a, b) -> Integer.compare(b.getValue().totalGames, a.getValue().totalGames))
                     .forEach(entry -> {
                         ColorGroupStats stats = entry.getValue();
