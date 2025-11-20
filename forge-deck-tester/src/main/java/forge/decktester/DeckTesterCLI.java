@@ -103,7 +103,37 @@ public class DeckTesterCLI {
             int turns = outcome.getLastTurnNumber();
             boolean isDraw = outcome.isDraw();
 
-            originalOut.println("RESULT:winner=" + winner + ",turns=" + turns + ",draw=" + isDraw);
+            // Extract placement data: rank players by life total
+            // Winners are ranked by life (highest first), then losers by life (highest first)
+            List<PlayerPlacement> placements = new ArrayList<>();
+            for (Map.Entry<forge.game.player.RegisteredPlayer, forge.game.player.PlayerStatistics> entry : outcome) {
+                forge.game.player.RegisteredPlayer player = entry.getKey();
+                forge.game.player.PlayerStatistics stats = entry.getValue();
+
+                String playerName = outcome.getPlayerNames().get(player);
+                boolean won = stats.getOutcome().hasWon();
+                int life = player.getPlayer().getLife(); // Get life total from the actual player
+
+                placements.add(new PlayerPlacement(playerName, won, life));
+            }
+
+            // Sort: winners first (by life desc), then losers (by life desc)
+            placements.sort((a, b) -> {
+                if (a.won != b.won) {
+                    return a.won ? -1 : 1; // Winners before losers
+                }
+                return Integer.compare(b.life, a.life); // Higher life first
+            });
+
+            // Build placement string: name:placement:life|name:placement:life|...
+            StringBuilder placementStr = new StringBuilder();
+            for (int i = 0; i < placements.size(); i++) {
+                if (i > 0) placementStr.append("|");
+                PlayerPlacement p = placements.get(i);
+                placementStr.append(p.name).append(":").append(i + 1).append(":").append(p.life);
+            }
+
+            originalOut.println("RESULT:winner=" + winner + ",turns=" + turns + ",draw=" + isDraw + ",placements=" + placementStr);
             originalOut.flush();
             System.exit(0);
 
@@ -835,6 +865,21 @@ public class DeckTesterCLI {
         String deck1Path = null;
         String deck2Path = null;
         List<String> opponentDeckPaths = new ArrayList<>();
+    }
+
+    /**
+     * Helper class for player placement data.
+     */
+    private static class PlayerPlacement {
+        final String name;
+        final boolean won;
+        final int life;
+
+        PlayerPlacement(String name, boolean won, int life) {
+            this.name = name;
+            this.won = won;
+            this.life = life;
+        }
     }
 
     /**

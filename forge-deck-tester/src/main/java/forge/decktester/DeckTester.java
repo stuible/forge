@@ -415,11 +415,17 @@ public class DeckTester {
         final String winner;  // "Input Deck", "Opponent 1", or null for draw
         final int turns;
         final boolean isDraw;
+        final Map<String, Integer> opponentPlacements; // Opponent name -> placement (1st, 2nd, 3rd)
 
         SimpleGameResult(String winner, int turns, boolean isDraw) {
+            this(winner, turns, isDraw, new HashMap<>());
+        }
+
+        SimpleGameResult(String winner, int turns, boolean isDraw, Map<String, Integer> opponentPlacements) {
             this.winner = winner;
             this.turns = turns;
             this.isDraw = isDraw;
+            this.opponentPlacements = opponentPlacements;
         }
     }
 
@@ -619,16 +625,17 @@ public class DeckTester {
      * Parse game result from worker process output.
      */
     private SimpleGameResult parseGameResult(String output) {
-        // Look for result line: "RESULT:winner=Input Deck,turns=15,draw=false"
+        // Look for result line: "RESULT:winner=Input Deck,turns=15,draw=false,placements=..."
         for (String line : output.split("\n")) {
             if (line.startsWith("RESULT:")) {
                 String[] parts = line.substring(7).split(",");
                 String winner = null;
                 int turns = 0;
                 boolean isDraw = false;
+                Map<String, Integer> opponentPlacements = new HashMap<>();
 
                 for (String part : parts) {
-                    String[] kv = part.split("=");
+                    String[] kv = part.split("=", 2);
                     if (kv.length == 2) {
                         switch (kv[0]) {
                             case "winner":
@@ -640,11 +647,26 @@ public class DeckTester {
                             case "draw":
                                 isDraw = Boolean.parseBoolean(kv[1]);
                                 break;
+                            case "placements":
+                                // Parse: name:placement:life|name:placement:life|...
+                                String[] playerData = kv[1].split("\\|");
+                                for (String pd : playerData) {
+                                    String[] fields = pd.split(":");
+                                    if (fields.length == 3) {
+                                        String name = fields[0];
+                                        int placement = Integer.parseInt(fields[1]);
+                                        // Skip the input deck, only store opponent placements
+                                        if (!"Input Deck".equals(name)) {
+                                            opponentPlacements.put(name, placement);
+                                        }
+                                    }
+                                }
+                                break;
                         }
                     }
                 }
 
-                return new SimpleGameResult(winner, turns, isDraw);
+                return new SimpleGameResult(winner, turns, isDraw, opponentPlacements);
             }
         }
 
@@ -1065,7 +1087,7 @@ public class DeckTester {
                     display.append("╚══════════════════════════════════════════════════════════════════════╝\n\n");
 
                     // Deck name
-                    display.append(String.format("  DECK:       %s\n\n", testDeckName));
+                    display.append(String.format("  DECK:               %s\n\n", testDeckName));
 
                     // Overall stats
                     int validGames = totalGamesPlayed - totalErrors;
@@ -1329,15 +1351,62 @@ public class DeckTester {
     }
 
     /**
+     * Weighted color statistics for multiplayer games.
+     * Uses placement-based scoring: 1st place = 3 points, 2nd = 2, 3rd = 1
+     */
+    public static class ColorWeightedStats {
+        public double weightedWins = 0.0; // Weighted wins (3 for 1st, 2 for 2nd, 1 for 3rd)
+        public double weightedLosses = 0.0; // Weighted losses (3 for 1st, 2 for 2nd, 1 for 3rd)
+        public int totalGames = 0; // Total games where this color was faced
+        public long totalTurns = 0;
+
+        public void addWeightedWin(int placement) {
+            // When we WIN, opponent gets weighted LOSS based on their placement
+            // Higher placement (eliminated first) = more weight
+            int weight = calculateWeight(placement);
+            weightedLosses += weight;
+            totalGames++;
+        }
+
+        public void addWeightedLoss(int placement) {
+            // When we LOSE, opponent gets weighted WIN based on their placement
+            // Lower placement (better finish) = more weight
+            int weight = calculateWeight(placement);
+            weightedWins += weight;
+            totalGames++;
+        }
+
+        private int calculateWeight(int placement) {
+            // 1st place = 3 points, 2nd = 2, 3rd = 1, 4th+ = 1
+            return Math.max(1, 4 - placement);
+        }
+
+        public double getWinRate() {
+            double total = weightedWins + weightedLosses;
+            return total > 0 ? weightedWins / total : 0.0;
+        }
+
+        public double getAverageRounds() {
+            return totalGames > 0 ? (double) totalTurns / totalGames : 0.0;
+        }
+    }
+
+    /**
      * Overall test results.
      */
     public static class TestResults {
         public final String deckName;
         public final Map<String, MatchupResult> matchups;
+        public final Map<String, ColorWeightedStats> colorStats; // Color identity -> weighted stats
 
         public TestResults(String deckName, Map<String, MatchupResult> matchups) {
+            this(deckName, matchups, new HashMap<>());
+        }
+
+        public TestResults(String deckName, Map<String, MatchupResult> matchups, Map<String, ColorWeightedStats> colorStats) {
             this.deckName = deckName;
             this.matchups = matchups;
+            this.colorStats = colorStats;
         }
 
         public double getOverallWinRate() {
