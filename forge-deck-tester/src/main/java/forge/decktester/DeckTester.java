@@ -1250,17 +1250,10 @@ public class DeckTester {
                     // Print the padded display
                     directOut.print(paddedDisplay.toString());
 
-                    // Count current lines for next iteration
-                    int currentLineCount = lines.length;
+                    // Clear everything below the display to remove remnants
+                    directOut.print("\033[J");
 
-                    // If we have fewer lines than before, clear the extra lines
-                    if (currentLineCount < previousLineCount) {
-                        for (int i = 0; i < previousLineCount - currentLineCount; i++) {
-                            directOut.print(" ".repeat(72) + "\n");
-                        }
-                    }
-
-                    previousLineCount = currentLineCount;
+                    previousLineCount = lines.length;
                     directOut.flush();
 
                     // Update every 500ms

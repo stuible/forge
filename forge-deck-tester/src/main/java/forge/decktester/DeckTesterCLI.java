@@ -87,8 +87,19 @@ public class DeckTesterCLI {
                 opponentDecks.add(tester.loadDeck(options.deck2Path));
             }
 
-            // Run the game and get Game object for placement data
+            // Run the game and track all players' states from the game BEFORE it ends
             forge.game.Game game = tester.playGameMultiplayerReturnGame(inputDeck, opponentDecks);
+
+            // Capture player states from the game's registered players list BEFORE getting outcome
+            // (game.getPlayers() becomes empty after game ends, but we can get them from game.getRegisteredPlayers())
+            List<PlayerPlacement> placements = new ArrayList<>();
+            for (forge.game.player.Player p : game.getRegisteredPlayers()) {
+                String playerName = p.getName();
+                boolean won = p.getOutcome().hasWon();
+                int life = p.getLife();
+                placements.add(new PlayerPlacement(playerName, won, life));
+            }
+
             forge.game.GameOutcome outcome = game.getOutcome();
 
             // Restore stdout only for result output
@@ -98,16 +109,6 @@ public class DeckTesterCLI {
             String winner = outcome.isDraw() ? "null" : outcome.getWinningLobbyPlayer().getName();
             int turns = outcome.getLastTurnNumber();
             boolean isDraw = outcome.isDraw();
-
-            // Extract placement data: rank players by life total
-            // Winners are ranked by life (highest first), then losers by life (highest first)
-            List<PlayerPlacement> placements = new ArrayList<>();
-            for (forge.game.player.Player p : game.getPlayers()) {
-                String playerName = p.getName();
-                boolean won = p.getOutcome().hasWon();
-                int life = p.getLife();
-                placements.add(new PlayerPlacement(playerName, won, life));
-            }
 
             // Sort: winners first (by life desc), then losers (by life desc)
             placements.sort((a, b) -> {
