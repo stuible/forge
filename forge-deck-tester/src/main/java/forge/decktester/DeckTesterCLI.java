@@ -726,8 +726,11 @@ public class DeckTesterCLI {
 
         // Validate worker mode options
         if (options.workerMode) {
-            if (options.deck1Path == null || options.deck2Path == null) {
-                throw new IllegalArgumentException("Worker mode requires --deck1 and --deck2");
+            if (options.deck1Path == null) {
+                throw new IllegalArgumentException("Worker mode requires --deck1");
+            }
+            if (options.deck2Path == null && options.opponentDeckPaths.isEmpty()) {
+                throw new IllegalArgumentException("Worker mode requires --deck2 or --opponent-deck");
             }
         }
 
