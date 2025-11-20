@@ -718,7 +718,7 @@ public class DeckTesterCLI {
         System.out.println("  -n, --games NUM          Games per matchup (default: " + DEFAULT_GAMES + ")");
         System.out.println("  --top NUM                Number of top decks to download (default: " + DEFAULT_TOP_DECKS + ")");
         System.out.println("  -o, --output FILE        Save results to CSV file");
-        System.out.println("  --ai-profile PROFILE     AI difficulty (Default, Cautious, Reckless, Experimental)");
+        System.out.println("  --ai-profile PROFILE     AI playstyle (Default, Cautious, Reckless, Experimental) [default: Reckless]");
         System.out.println("  --live                   Show live game progress (turn, phase, life totals)");
         System.out.println("  --commander-opponents N  Number of AI opponents in Commander (1-4, default: 1)");
         System.out.println();
@@ -784,7 +784,7 @@ public class DeckTesterCLI {
         int gamesPerMatchup = DEFAULT_GAMES;
         int topDecksCount = DEFAULT_TOP_DECKS;
         String outputFile = null;
-        String aiProfile = "Default";
+        String aiProfile = "Reckless"; // Default to Reckless for faster, more aggressive games
         boolean showLiveProgress = false;
         boolean verbose = false;
         boolean showHelp = false;

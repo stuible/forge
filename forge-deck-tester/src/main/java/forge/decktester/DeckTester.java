@@ -43,7 +43,7 @@ public class DeckTester {
     private final ExecutorService executor;
     private final Map<String, TestResults> resultsCache;
     private volatile boolean initialized = false;
-    private String aiProfile = "Default";
+    private String aiProfile = "Reckless"; // Reckless AI plays more aggressively for faster games
     private boolean showLiveProgress = false;
     private volatile boolean cancelled = false;
     private int commanderOpponents = 1; // Number of AI opponents in Commander games (1-4)
@@ -241,12 +241,29 @@ public class DeckTester {
                     try {
                         SimpleGameResult gameResult;
 
+                        // For multiplayer Commander, select random opponents from pool
+                        boolean isCmd = isCommanderDeck(testDeck) || isCommanderDeck(oppDeck);
+                        List<Deck> opponents = new ArrayList<>();
+                        opponents.add(oppDeck);
+
+                        if (isCmd && commanderOpponents > 1) {
+                            // Need more opponents - pick random ones from pool (excluding current oppDeck)
+                            List<Deck> availableOpponents = new ArrayList<>(opponentDecks);
+                            availableOpponents.remove(oppDeck);
+                            Collections.shuffle(availableOpponents);
+
+                            for (int i = 1; i < commanderOpponents && i - 1 < availableOpponents.size(); i++) {
+                                opponents.add(availableOpponents.get(i - 1));
+                            }
+                        }
+
                         if (USE_PROCESS_PARALLELISM) {
                             // Use separate process for true parallelism
-                            gameResult = playGameInProcess(testDeck, oppDeck);
+                            // For now, just pass first opponent (process mode needs update for multiplayer)
+                            gameResult = playGameInProcess(testDeck, opponents.get(0));
                         } else {
                             // Use in-process execution (limited by Forge's internal locks)
-                            GameOutcome outcome = playGame(testDeck, oppDeck);
+                            GameOutcome outcome = playGameMultiplayer(testDeck, opponents);
                             gameResult = new SimpleGameResult(
                                 outcome.isDraw() ? null : outcome.getWinningLobbyPlayer().getName(),
                                 outcome.getLastTurnNumber(),
@@ -623,6 +640,98 @@ public class DeckTester {
         } finally {
             showLiveProgress = oldShowLiveProgress;
         }
+    }
+
+    /**
+     * Play a multiplayer game with one input deck vs multiple opponents.
+     * @param inputDeck The deck being tested
+     * @param opponentDecks List of opponent decks (1 or more)
+     * @return Game outcome
+     * @throws TimeoutException if the game times out
+     */
+    private GameOutcome playGameMultiplayer(Deck inputDeck, List<Deck> opponentDecks) throws TimeoutException {
+        if (opponentDecks.size() == 1) {
+            // Just one opponent - use the regular playGame method
+            return playGame(inputDeck, opponentDecks.get(0));
+        }
+
+        // Multiplayer setup
+        boolean isCommander = isCommanderDeck(inputDeck);
+        int numPlayers = opponentDecks.size() + 1; // Input deck + opponents
+        final int gameTimeoutSeconds = 3600; // 1 hour max per game
+
+        // Create players with specified AI profile
+        Set<AIOption> aiOptions = fastMode ? null : Set.of(AIOption.USE_SIMULATION);
+        List<RegisteredPlayer> players = new ArrayList<>();
+
+        // Add input deck
+        RegisteredPlayer rp1 = isCommander ? RegisteredPlayer.forCommander(inputDeck) : new RegisteredPlayer(inputDeck);
+        rp1.setPlayer(GamePlayerUtil.createAiPlayer("Input Deck", 0, 0, aiOptions, aiProfile));
+        players.add(rp1);
+
+        // Add all opponent decks
+        for (int i = 0; i < opponentDecks.size(); i++) {
+            Deck oppDeck = opponentDecks.get(i);
+            RegisteredPlayer rp = isCommander ? RegisteredPlayer.forCommander(oppDeck) : new RegisteredPlayer(oppDeck);
+            rp.setPlayer(GamePlayerUtil.createAiPlayer("Opponent " + (i + 1), 0, 0, aiOptions, aiProfile));
+            players.add(rp);
+        }
+
+        // Randomize player order for turn order
+        List<RegisteredPlayer> randomizedPlayers = new ArrayList<>(players);
+        Collections.shuffle(randomizedPlayers);
+
+        // Set up game rules
+        GameType gameType = isCommander ? GameType.Commander : GameType.Constructed;
+        GameRules rules = new GameRules(gameType);
+        if (isCommander) {
+            rules.addAppliedVariant(GameType.Commander);
+        }
+        rules.setGamesPerMatch(1);
+        rules.setManaBurn(false);
+
+        // Create match and game
+        Match match = new Match(rules, randomizedPlayers, "Test");
+        final Game game = match.createGame();
+        game.AI_TIMEOUT = 3;
+        game.AI_CAN_USE_TIMEOUT = true;
+
+        if (showLiveProgress) {
+            ExecutorService gameExecutor = Executors.newSingleThreadExecutor();
+            Future<Void> gameFuture = gameExecutor.submit(() -> {
+                match.startGame(game);
+                return null;
+            });
+
+            Thread monitorThread = new Thread(() -> monitorGameProgress(game, inputDeck.getName(), "Multiplayer", isCommander));
+            monitorThread.setDaemon(true);
+            monitorThread.start();
+
+            try {
+                gameFuture.get(gameTimeoutSeconds, TimeUnit.SECONDS);
+            } catch (TimeoutException e) {
+                System.err.println("\nGame timed out - forcing end");
+                gameFuture.cancel(true);
+                gameExecutor.shutdownNow();
+                throw e;
+            } catch (Exception e) {
+                System.err.println("\nGame interrupted: " + e.getMessage());
+                throw new RuntimeException("Game interrupted", e);
+            } finally {
+                gameExecutor.shutdown();
+                try {
+                    if (!gameExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                        gameExecutor.shutdownNow();
+                    }
+                } catch (InterruptedException ie) {
+                    gameExecutor.shutdownNow();
+                }
+            }
+        } else {
+            match.startGame(game);
+        }
+
+        return game.getOutcome();
     }
 
     /**
