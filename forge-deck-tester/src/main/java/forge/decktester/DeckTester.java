@@ -180,7 +180,7 @@ public class DeckTester {
     /**
      * Test a deck against multiple opponent decks.
      */
-    public Map<String, MatchupResult> testDeck(
+    public TestResults testDeck(
             Deck testDeck,
             List<Deck> opponentDecks,
             int gamesPerMatchup) throws Exception {
@@ -224,6 +224,9 @@ public class DeckTester {
             result.opponentColorIdentity = getDeckColorIdentity(opponent);
             matchupResults.put(opponent.getName(), result);
         }
+
+        // Create weighted color statistics tracking for multiplayer
+        Map<String, ColorWeightedStats> colorStats = new ConcurrentHashMap<>();
 
         // Submit all individual games to thread pool (not matchups)
         List<Future<Void>> futures = new ArrayList<>();
@@ -283,11 +286,57 @@ public class DeckTester {
                                     totalWins++;
                                     totalGamesPlayed++;
                                 }
+
+                                // Track weighted color stats for all opponents when we WIN
+                                for (Map.Entry<String, Integer> entry : gameResult.opponentPlacements.entrySet()) {
+                                    String opponentName = entry.getKey();
+                                    int placement = entry.getValue();
+
+                                    // Map "Opponent X" to deck via index
+                                    String color = "Unknown";
+                                    if (opponentName.startsWith("Opponent ")) {
+                                        try {
+                                            int oppIndex = Integer.parseInt(opponentName.substring(9)) - 1;
+                                            if (oppIndex >= 0 && oppIndex < opponents.size()) {
+                                                color = getDeckColorIdentity(opponents.get(oppIndex));
+                                            }
+                                        } catch (NumberFormatException e) {
+                                            // Keep as Unknown
+                                        }
+                                    }
+
+                                    colorStats.putIfAbsent(color, new ColorWeightedStats());
+                                    colorStats.get(color).addWeightedWin(placement);
+                                    colorStats.get(color).totalTurns += gameResult.turns;
+                                }
                             } else {
                                 result.losses++;
                                 synchronized (this) {
                                     totalLosses++;
                                     totalGamesPlayed++;
+                                }
+
+                                // Track weighted color stats for all opponents when we LOSE
+                                for (Map.Entry<String, Integer> entry : gameResult.opponentPlacements.entrySet()) {
+                                    String opponentName = entry.getKey();
+                                    int placement = entry.getValue();
+
+                                    // Map "Opponent X" to deck via index
+                                    String color = "Unknown";
+                                    if (opponentName.startsWith("Opponent ")) {
+                                        try {
+                                            int oppIndex = Integer.parseInt(opponentName.substring(9)) - 1;
+                                            if (oppIndex >= 0 && oppIndex < opponents.size()) {
+                                                color = getDeckColorIdentity(opponents.get(oppIndex));
+                                            }
+                                        } catch (NumberFormatException e) {
+                                            // Keep as Unknown
+                                        }
+                                    }
+
+                                    colorStats.putIfAbsent(color, new ColorWeightedStats());
+                                    colorStats.get(color).addWeightedLoss(placement);
+                                    colorStats.get(color).totalTurns += gameResult.turns;
                                 }
                             }
 
@@ -404,7 +453,7 @@ public class DeckTester {
             stopUnifiedDisplay();
         }
 
-        return results;
+        return new TestResults(testDeck.getName(), results, colorStats);
     }
 
 
@@ -692,35 +741,37 @@ public class DeckTester {
     }
 
     /**
+     * Determine if game monitoring should be enabled.
+     * True if: live progress display is on OR worker needs to send progress updates.
+     */
+    private boolean shouldMonitorGame() {
+        return showLiveProgress || progressOut != null;
+    }
+
+    /**
      * Play a multiplayer game directly (used by worker mode).
-     * Always enables monitoring if progressOut is set.
      */
     public GameOutcome playGameMultiplayerDirect(Deck inputDeck, List<Deck> opponentDecks) throws TimeoutException {
-        // Enable monitoring temporarily if we have a progress output stream
-        boolean oldShowLiveProgress = showLiveProgress;
-        if (progressOut != null) {
-            showLiveProgress = true; // Force monitoring for progress output
-        }
+        return playGameMultiplayer(inputDeck, opponentDecks);
+    }
 
-        try {
-            return playGameMultiplayer(inputDeck, opponentDecks);
-        } finally {
-            showLiveProgress = oldShowLiveProgress;
-        }
+    /**
+     * Play a multiplayer game and return the Game object (for accessing final state).
+     * Used by worker mode to get final life totals.
+     */
+    public forge.game.Game playGameMultiplayerReturnGame(Deck inputDeck, List<Deck> opponentDecks) throws TimeoutException {
+        return playGameMultiplayerInternal(inputDeck, opponentDecks);
     }
 
     /**
      * Play a multiplayer game with one input deck vs multiple opponents.
      * @param inputDeck The deck being tested
      * @param opponentDecks List of opponent decks (1 or more)
-     * @return Game outcome
+     * @return Game object (call game.getOutcome() to get outcome)
      * @throws TimeoutException if the game times out
      */
-    private GameOutcome playGameMultiplayer(Deck inputDeck, List<Deck> opponentDecks) throws TimeoutException {
-        if (opponentDecks.size() == 1) {
-            // Just one opponent - use the regular playGame method
-            return playGame(inputDeck, opponentDecks.get(0));
-        }
+    private forge.game.Game playGameMultiplayerInternal(Deck inputDeck, List<Deck> opponentDecks) throws TimeoutException {
+        // Handle both 1v1 and multiplayer cases
 
         // Multiplayer setup
         boolean isCommander = isCommanderDeck(inputDeck);
@@ -762,7 +813,7 @@ public class DeckTester {
         game.AI_TIMEOUT = 3;
         game.AI_CAN_USE_TIMEOUT = true;
 
-        if (showLiveProgress) {
+        if (shouldMonitorGame()) {
             ExecutorService gameExecutor = Executors.newSingleThreadExecutor();
             Future<Void> gameFuture = gameExecutor.submit(() -> {
                 match.startGame(game);
@@ -797,7 +848,14 @@ public class DeckTester {
             match.startGame(game);
         }
 
-        return game.getOutcome();
+        return game;
+    }
+
+    /**
+     * Wrapper to maintain API compatibility - returns outcome from game.
+     */
+    private GameOutcome playGameMultiplayer(Deck inputDeck, List<Deck> opponentDecks) throws TimeoutException {
+        return playGameMultiplayerInternal(inputDeck, opponentDecks).getOutcome();
     }
 
     /**
@@ -849,17 +907,17 @@ public class DeckTester {
         // Create match and game with randomized player order
         Match match = new Match(rules, randomizedPlayers, "Test");
         final Game game = match.createGame();
+        // Performance optimization: reduce AI decision timeout from 5s to 3s
+        game.AI_TIMEOUT = 3;
+        game.AI_CAN_USE_TIMEOUT = true;
 
-        if (showLiveProgress) {
+        if (shouldMonitorGame()) {
             // Run game in separate thread and monitor progress
             ExecutorService gameExecutor = Executors.newSingleThreadExecutor();
             Future<Void> gameFuture = gameExecutor.submit(() -> {
                 match.startGame(game);
                 return null;
             });
-        // Performance optimization: reduce AI decision timeout from 5s to 3s
-        game.AI_TIMEOUT = 3;
-        game.AI_CAN_USE_TIMEOUT = true;
 
             // Monitor game progress in real-time (in a separate thread)
             Thread monitorThread = new Thread(() -> monitorGameProgress(game, deck1.getName(), deck2.getName(), isCommander));
@@ -1073,6 +1131,8 @@ public class DeckTester {
             directOut.print("\033[2J\033[H");
             directOut.flush();
 
+            int previousLineCount = 0;
+
             while (displayRunning) {
                 try {
                     // Move cursor to top (no full clear to reduce flicker)
@@ -1180,11 +1240,27 @@ public class DeckTester {
 
                     display.append("╚══════════════════════════════════════════════════════════════════════╝\n");
 
-                    // Print the display
-                    directOut.print(display.toString());
+                    // Pad each line to 72 chars (width of box) to clear remnants
+                    String[] lines = display.toString().split("\n", -1);
+                    StringBuilder paddedDisplay = new StringBuilder();
+                    for (String line : lines) {
+                        paddedDisplay.append(padLine(line, 72)).append("\n");
+                    }
 
-                    // Clear to end of screen to remove any remnants below
-                    directOut.print("\033[J");
+                    // Print the padded display
+                    directOut.print(paddedDisplay.toString());
+
+                    // Count current lines for next iteration
+                    int currentLineCount = lines.length;
+
+                    // If we have fewer lines than before, clear the extra lines
+                    if (currentLineCount < previousLineCount) {
+                        for (int i = 0; i < previousLineCount - currentLineCount; i++) {
+                            directOut.print(" ".repeat(72) + "\n");
+                        }
+                    }
+
+                    previousLineCount = currentLineCount;
                     directOut.flush();
 
                     // Update every 500ms

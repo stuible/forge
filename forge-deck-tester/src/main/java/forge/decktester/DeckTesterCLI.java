@@ -87,13 +87,9 @@ public class DeckTesterCLI {
                 opponentDecks.add(tester.loadDeck(options.deck2Path));
             }
 
-            // Run the game (multiplayer if multiple opponents)
-            forge.game.GameOutcome outcome;
-            if (opponentDecks.size() == 1) {
-                outcome = tester.playGameDirect(inputDeck, opponentDecks.get(0));
-            } else {
-                outcome = tester.playGameMultiplayerDirect(inputDeck, opponentDecks);
-            }
+            // Run the game and get Game object for placement data
+            forge.game.Game game = tester.playGameMultiplayerReturnGame(inputDeck, opponentDecks);
+            forge.game.GameOutcome outcome = game.getOutcome();
 
             // Restore stdout only for result output
             System.setOut(originalOut);
@@ -106,14 +102,10 @@ public class DeckTesterCLI {
             // Extract placement data: rank players by life total
             // Winners are ranked by life (highest first), then losers by life (highest first)
             List<PlayerPlacement> placements = new ArrayList<>();
-            for (Map.Entry<forge.game.player.RegisteredPlayer, forge.game.player.PlayerStatistics> entry : outcome) {
-                forge.game.player.RegisteredPlayer player = entry.getKey();
-                forge.game.player.PlayerStatistics stats = entry.getValue();
-
-                String playerName = outcome.getPlayerNames().get(player);
-                boolean won = stats.getOutcome().hasWon();
-                int life = player.getPlayer().getLife(); // Get life total from the actual player
-
+            for (forge.game.player.Player p : game.getPlayers()) {
+                String playerName = p.getName();
+                boolean won = p.getOutcome().hasWon();
+                int life = p.getLife();
                 placements.add(new PlayerPlacement(playerName, won, life));
             }
 
@@ -246,7 +238,7 @@ public class DeckTesterCLI {
             if (options.showLiveProgress) {
                 tester.setDirectOutputStream(originalOut);
             }
-            Map<String, MatchupResult> results = tester.testDeck(
+            TestResults testResults = tester.testDeck(
                     testDeck,
                     opponentDecks,
                     options.gamesPerMatchup
@@ -256,7 +248,6 @@ public class DeckTesterCLI {
             long duration = (endTime - startTime) / 1000;
 
             // Step 4: Print results
-            TestResults testResults = new TestResults(testDeck.getName(), results);
             printResults(testResults, options, duration);
 
             // Step 5: Save results if requested
@@ -402,10 +393,6 @@ public class DeckTesterCLI {
         System.out.println("=".repeat(80) + "\n");
 
         // Overall statistics
-        int totalGames = results.matchups.values().stream()
-                .mapToInt(MatchupResult::getTotalGames)
-                .sum();
-
         int totalWins = results.matchups.values().stream()
                 .mapToInt(m -> m.wins)
                 .sum();
@@ -423,6 +410,7 @@ public class DeckTesterCLI {
                 .sum();
 
         int validGames = totalWins + totalLosses + totalDraws;
+        int totalGames = validGames + totalErrors;
 
         System.out.println("OVERALL PERFORMANCE");
         System.out.println("-".repeat(80));
@@ -454,38 +442,26 @@ public class DeckTesterCLI {
             System.out.println("MULTIPLAYER PERFORMANCE ANALYSIS");
             System.out.println("-".repeat(80));
 
-            // Group by color identity
-            Map<String, ColorGroupStats> colorStats = new HashMap<>();
-            for (MatchupResult matchup : results.matchups.values()) {
-                String color = matchup.opponentColorIdentity;
-                colorStats.putIfAbsent(color, new ColorGroupStats());
-                ColorGroupStats stats = colorStats.get(color);
-                stats.wins += matchup.wins;
-                stats.losses += matchup.losses;
-                stats.draws += matchup.draws;
-                stats.errors += matchup.errors;
-                stats.totalTurns += matchup.totalTurns;
-                stats.totalGames += matchup.getTotalGames();
-            }
+            // Use weighted color statistics from TestResults
+            Map<String, DeckTester.ColorWeightedStats> colorStats = results.colorStats;
 
-            // Show overall color presence (only colors actually faced)
-            System.out.println("\nColor Identity Breakdown:");
-            System.out.printf("%-15s %8s %10s %11s %10s%n", "Colors", "Pods", "Win Rate", "Avg Rounds", "W-L-D-E");
+            // Show overall color presence (only colors actually faced) with weighted scoring
+            System.out.println("\nColor Identity Breakdown (Weighted by Placement):");
+            System.out.println("Note: Scores weighted by finish position - 1st=3pts, 2nd=2pts, 3rd=1pt");
+            System.out.printf("%-15s %8s %10s %11s %14s%n", "Colors", "Games", "Win Rate", "Avg Rounds", "Score (W-L)");
             System.out.println("-".repeat(80));
             colorStats.entrySet().stream()
                     .filter(e -> e.getValue().totalGames > 0) // Only show colors actually faced
                     .sorted((a, b) -> Integer.compare(b.getValue().totalGames, a.getValue().totalGames))
                     .forEach(entry -> {
-                        ColorGroupStats stats = entry.getValue();
-                        System.out.printf("%-15s %8d  %9.1f%%  %10.1f  %3d-%3d-%2d-%2d%n",
+                        DeckTester.ColorWeightedStats stats = entry.getValue();
+                        System.out.printf("%-15s %8d  %9.1f%%  %10.1f  %5.1f-%5.1f%n",
                                 entry.getKey(),
                                 stats.totalGames,
                                 stats.getWinRate() * 100,
                                 stats.getAverageRounds(),
-                                stats.wins,
-                                stats.losses,
-                                stats.draws,
-                                stats.errors);
+                                stats.weightedWins,
+                                stats.weightedLosses);
                     });
 
             // Show best matchups (colors you beat most often)
@@ -493,15 +469,15 @@ public class DeckTesterCLI {
             System.out.printf("%-15s %10s %8s%n", "Colors", "Win Rate", "Sample");
             System.out.println("-".repeat(80));
             colorStats.entrySet().stream()
-                    .filter(e -> e.getValue().wins + e.getValue().losses >= 5) // Minimum sample
+                    .filter(e -> e.getValue().totalGames >= 5) // Minimum sample
                     .sorted((a, b) -> Double.compare(b.getValue().getWinRate(), a.getValue().getWinRate()))
                     .limit(5)
                     .forEach(entry -> {
-                        ColorGroupStats stats = entry.getValue();
-                        System.out.printf("%-15s %9.1f%%  %3d pods%n",
+                        DeckTester.ColorWeightedStats stats = entry.getValue();
+                        System.out.printf("%-15s %9.1f%%  %3d games%n",
                                 entry.getKey(),
                                 stats.getWinRate() * 100,
-                                stats.wins + stats.losses);
+                                stats.totalGames);
                     });
 
             // Show worst matchups (colors that beat you most often)
@@ -509,15 +485,15 @@ public class DeckTesterCLI {
             System.out.printf("%-15s %10s %8s%n", "Colors", "Win Rate", "Sample");
             System.out.println("-".repeat(80));
             colorStats.entrySet().stream()
-                    .filter(e -> e.getValue().wins + e.getValue().losses >= 5) // Minimum sample
+                    .filter(e -> e.getValue().totalGames >= 5) // Minimum sample
                     .sorted((a, b) -> Double.compare(a.getValue().getWinRate(), b.getValue().getWinRate()))
                     .limit(5)
                     .forEach(entry -> {
-                        ColorGroupStats stats = entry.getValue();
-                        System.out.printf("%-15s %9.1f%%  %3d pods%n",
+                        DeckTester.ColorWeightedStats stats = entry.getValue();
+                        System.out.printf("%-15s %9.1f%%  %3d games%n",
                                 entry.getKey(),
                                 stats.getWinRate() * 100,
-                                stats.wins + stats.losses);
+                                stats.totalGames);
                     });
         } else {
             // For 1v1, show individual matchups
