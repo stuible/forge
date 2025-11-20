@@ -492,7 +492,7 @@ public class DeckTester {
                 // Multiplayer: show first deck + count of others
                 int othersCount = opponentDecks.size() - 1;
                 int totalPlayers = opponentDecks.size() + 1; // opponents + input deck
-                gameState.opponentName = String.format("%s + %d other%s (%d players)",
+                gameState.opponentName = String.format("%s + %d other%s",
                     opponentDecks.get(0).getName(),
                     othersCount,
                     othersCount == 1 ? "" : "s",
