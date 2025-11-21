@@ -250,13 +250,14 @@ public class DeckTester {
                         opponents.add(oppDeck);
 
                         if (isCmd && commanderOpponents > 1) {
-                            // Need more opponents - pick random ones from pool (excluding current oppDeck)
+                            // Need more opponents - pick from pool, allowing reuse if needed
                             List<Deck> availableOpponents = new ArrayList<>(opponentDecks);
-                            availableOpponents.remove(oppDeck);
                             Collections.shuffle(availableOpponents);
 
-                            for (int i = 1; i < commanderOpponents && i - 1 < availableOpponents.size(); i++) {
-                                opponents.add(availableOpponents.get(i - 1));
+                            for (int i = 1; i < commanderOpponents; i++) {
+                                // Cycle through available decks, reusing if necessary
+                                Deck nextOpp = availableOpponents.get(i % availableOpponents.size());
+                                opponents.add(nextOpp);
                             }
                         }
 
@@ -1430,6 +1431,7 @@ public class DeckTester {
         public double weightedLosses = 0.0; // Weighted losses (3 for 1st, 2 for 2nd, 1 for 3rd)
         public int totalGames = 0; // Total games where this color was faced
         public long totalTurns = 0;
+        public int numPlayers = 2; // Track number of players for round calculation
 
         public void addWeightedWin(int opponentPlacement, int totalPlayers) {
             // When we WIN against an opponent:
@@ -1438,6 +1440,7 @@ public class DeckTester {
             double weight = totalPlayers - 1;
             weightedLosses += weight; // Track YOUR wins
             totalGames++;
+            this.numPlayers = totalPlayers; // Track player count for round calculation
         }
 
         public void addWeightedLoss(int opponentPlacement, int totalPlayers) {
@@ -1447,6 +1450,7 @@ public class DeckTester {
             double weight = calculateWeight(opponentPlacement, totalPlayers);
             weightedWins += weight; // Track YOUR losses (opponent's wins)
             totalGames++;
+            this.numPlayers = totalPlayers; // Track player count for round calculation
         }
 
         private double calculateWeight(int placement, int totalPlayers) {
@@ -1464,7 +1468,9 @@ public class DeckTester {
         }
 
         public double getAverageRounds() {
-            return totalGames > 0 ? (double) totalTurns / totalGames : 0.0;
+            if (totalGames == 0) return 0.0;
+            double avgTurns = (double) totalTurns / totalGames;
+            return numPlayers > 0 ? avgTurns / numPlayers : avgTurns;
         }
     }
 
