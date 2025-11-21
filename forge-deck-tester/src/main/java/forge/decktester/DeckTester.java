@@ -717,8 +717,6 @@ public class DeckTester {
                     }
                 }
 
-                // Debug: show what we parsed
-                System.err.println("DEBUG parseGameResult: opponentPlacements=" + opponentPlacements);
                 return new SimpleGameResult(winner, turns, isDraw, opponentPlacements);
             }
         }
