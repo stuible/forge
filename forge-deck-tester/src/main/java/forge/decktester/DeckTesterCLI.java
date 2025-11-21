@@ -90,8 +90,9 @@ public class DeckTesterCLI {
             // Run the game and track all players' states from the game BEFORE it ends
             forge.game.Game game = tester.playGameMultiplayerReturnGame(inputDeck, opponentDecks);
 
-            // Get elimination order tracked during the game
+            // Get elimination order and reasons tracked during the game
             Map<String, Integer> eliminationOrder = tester.getEliminationOrder();
+            Map<String, String> eliminationReasons = tester.getEliminationReasons();
 
             // Capture player states from the game's registered players list BEFORE getting outcome
             // (game.getPlayers() becomes empty after game ends, but we can get them from game.getRegisteredPlayers())
@@ -102,7 +103,11 @@ public class DeckTesterCLI {
                 int life = p.getLife();
                 // Get elimination position (0 = winner/not eliminated, higher = eliminated earlier)
                 int elimPosition = eliminationOrder.getOrDefault(playerName, 0);
-                placements.add(new PlayerPlacement(playerName, won, life, elimPosition));
+                // Get loss reason (from tracking or directly from outcome)
+                String lossReason = eliminationReasons.getOrDefault(playerName,
+                    p.getOutcome() != null && p.getOutcome().lossState != null ?
+                        p.getOutcome().lossState.toString() : null);
+                placements.add(new PlayerPlacement(playerName, won, life, elimPosition, lossReason));
             }
 
             forge.game.GameOutcome outcome = game.getOutcome();
@@ -128,12 +133,13 @@ public class DeckTesterCLI {
                 return Integer.compare(b.life, a.life); // Fallback to life total
             });
 
-            // Build placement string: name:placement:life|name:placement:life|...
+            // Build placement string: name:placement:life:lossReason|name:placement:life:lossReason|...
             StringBuilder placementStr = new StringBuilder();
             for (int i = 0; i < placements.size(); i++) {
                 if (i > 0) placementStr.append("|");
                 PlayerPlacement p = placements.get(i);
-                placementStr.append(p.name).append(":").append(i + 1).append(":").append(p.life);
+                String reason = p.lossReason != null ? p.lossReason : "Winner";
+                placementStr.append(p.name).append(":").append(i + 1).append(":").append(p.life).append(":").append(reason);
             }
 
             originalOut.println("RESULT:winner=" + winner + ",turns=" + turns + ",draw=" + isDraw + ",placements=" + placementStr);
@@ -681,23 +687,31 @@ public class DeckTesterCLI {
             return;
         }
 
-        // Generate filename with timestamp
+        // Generate filename with timestamp in .logs directory
         String timestamp = new SimpleDateFormat("yyyy-MM-dd_HHmmss").format(new Date());
         String sanitizedName = deckName.replaceAll("[^a-zA-Z0-9_\\-]", "_");
-        String filename = "test_report_" + sanitizedName + "_" + timestamp + ".csv";
+
+        // Create .logs directory if it doesn't exist
+        File logsDir = new File(".logs");
+        if (!logsDir.exists()) {
+            logsDir.mkdirs();
+        }
+
+        String filename = ".logs/test_report_" + sanitizedName + "_" + timestamp + ".csv";
 
         try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
             // CSV Header
-            writer.println("Timestamp,TestDeck,Opponent,OpponentColors,Result,Turns,Placement,TotalPlayers,AllPlacements");
+            writer.println("Timestamp,TestDeck,Opponent,OpponentColors,Result,MyLossReason,Turns,Placement,TotalPlayers,AllPlacements");
 
             // Write each game record
             for (DeckTester.GameRecord record : records) {
-                writer.printf("%s,%s,%s,%s,%s,%d,%d,%d,%s%n",
+                writer.printf("%s,%s,%s,%s,%s,%s,%d,%d,%d,%s%n",
                     escapeCSV(record.timestamp),
                     escapeCSV(record.testDeck),
                     escapeCSV(record.opponent),
                     escapeCSV(record.opponentColors),
                     record.result,
+                    record.myLossReason != null ? record.myLossReason : "",
                     record.turns,
                     record.placement,
                     record.totalPlayers,
@@ -989,16 +1003,22 @@ public class DeckTesterCLI {
         final boolean won;
         final int life;
         final int eliminationPosition; // 0 = winner, 1 = first eliminated, 2 = second, etc.
+        final String lossReason; // null for winner, e.g., "LifeReachedZero", "CommanderDamage", "Milled"
 
         PlayerPlacement(String name, boolean won, int life) {
-            this(name, won, life, 0);
+            this(name, won, life, 0, null);
         }
 
         PlayerPlacement(String name, boolean won, int life, int eliminationPosition) {
+            this(name, won, life, eliminationPosition, null);
+        }
+
+        PlayerPlacement(String name, boolean won, int life, int eliminationPosition, String lossReason) {
             this.name = name;
             this.won = won;
             this.life = life;
             this.eliminationPosition = eliminationPosition;
+            this.lossReason = lossReason;
         }
     }
 

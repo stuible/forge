@@ -68,6 +68,7 @@ public class DeckTester {
     // Maps player name -> elimination position (1 = first eliminated, higher = eliminated later)
     // Winner is not in this map (they weren't eliminated)
     private final Map<String, Integer> eliminationOrder = new ConcurrentHashMap<>();
+    private final Map<String, String> eliminationReasons = new ConcurrentHashMap<>(); // Player name -> loss reason
     private volatile int nextEliminationPosition = 1;
 
     // Active game tracking for unified display
@@ -94,10 +95,16 @@ public class DeckTester {
         public final int turns;
         public final int placement; // 1 = 1st place, 2 = 2nd, etc.
         public final int totalPlayers;
-        public final String allPlacements; // "Player1:1,Player2:2,..." for multiplayer
+        public final String allPlacements; // "Player1:1:life:reason|Player2:2:life:reason|..." for multiplayer
+        public final String myLossReason; // null if won, e.g., "CommanderDamage", "LifeReachedZero"
 
         public GameRecord(String testDeck, String opponent, String opponentColors, String result,
                           int turns, int placement, int totalPlayers, String allPlacements) {
+            this(testDeck, opponent, opponentColors, result, turns, placement, totalPlayers, allPlacements, null);
+        }
+
+        public GameRecord(String testDeck, String opponent, String opponentColors, String result,
+                          int turns, int placement, int totalPlayers, String allPlacements, String myLossReason) {
             this.timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
             this.testDeck = testDeck;
             this.opponent = opponent;
@@ -107,6 +114,7 @@ public class DeckTester {
             this.placement = placement;
             this.totalPlayers = totalPlayers;
             this.allPlacements = allPlacements;
+            this.myLossReason = myLossReason;
         }
     }
 
@@ -159,10 +167,19 @@ public class DeckTester {
     }
 
     /**
+     * Get the elimination reasons map from the last game.
+     * Maps player name -> loss reason (e.g., "LifeReachedZero", "CommanderDamage", "Milled").
+     */
+    public Map<String, String> getEliminationReasons() {
+        return new HashMap<>(eliminationReasons);
+    }
+
+    /**
      * Clear elimination tracking for a new game.
      */
     private void clearEliminationTracking() {
         eliminationOrder.clear();
+        eliminationReasons.clear();
         nextEliminationPosition = 1;
     }
 
@@ -431,14 +448,14 @@ public class DeckTester {
                             int placement = "Input Deck".equals(gameResult.winner) ? 1 :
                                 (gameResult.isDraw ? 0 : opponents.size() + 1); // Last place if lost
                             String primaryOppColor = getDeckColorIdentity(oppDeck);
-                            StringBuilder allPlacements = new StringBuilder();
-                            for (Map.Entry<String, Integer> entry : gameResult.opponentPlacements.entrySet()) {
-                                if (allPlacements.length() > 0) allPlacements.append(";");
-                                allPlacements.append(entry.getKey()).append(":").append(entry.getValue());
-                            }
+                            // Use full placements string with loss reasons if available
+                            String allPlacementsStr = gameResult.allPlacementsStr != null && !gameResult.allPlacementsStr.isEmpty()
+                                ? gameResult.allPlacementsStr : buildPlacementsString(gameResult.opponentPlacements);
+                            // Get Input Deck's loss reason if we lost
+                            String myLossReason = gameResult.lossReasons.get("Input Deck");
                             gameRecords.add(new GameRecord(
                                 testDeckName, oppDeck.getName(), primaryOppColor, resultType,
-                                gameResult.turns, placement, opponents.size() + 1, allPlacements.toString()
+                                gameResult.turns, placement, opponents.size() + 1, allPlacementsStr, myLossReason
                             ));
                         }
 
@@ -567,6 +584,17 @@ public class DeckTester {
         return new TestResults(testDeck.getName(), results, colorStats);
     }
 
+    /**
+     * Build a simple placements string from opponent placements map.
+     */
+    private String buildPlacementsString(Map<String, Integer> opponentPlacements) {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, Integer> entry : opponentPlacements.entrySet()) {
+            if (sb.length() > 0) sb.append("|");
+            sb.append(entry.getKey()).append(":").append(entry.getValue());
+        }
+        return sb.toString();
+    }
 
     /**
      * Simple result structure for game outcomes.
@@ -576,16 +604,25 @@ public class DeckTester {
         final int turns;
         final boolean isDraw;
         final Map<String, Integer> opponentPlacements; // Opponent name -> placement (1st, 2nd, 3rd)
+        final Map<String, String> lossReasons; // Player name -> loss reason (e.g., "CommanderDamage")
+        final String allPlacementsStr; // Full placements string for CSV
 
         SimpleGameResult(String winner, int turns, boolean isDraw) {
-            this(winner, turns, isDraw, new HashMap<>());
+            this(winner, turns, isDraw, new HashMap<>(), new HashMap<>(), "");
         }
 
         SimpleGameResult(String winner, int turns, boolean isDraw, Map<String, Integer> opponentPlacements) {
+            this(winner, turns, isDraw, opponentPlacements, new HashMap<>(), "");
+        }
+
+        SimpleGameResult(String winner, int turns, boolean isDraw, Map<String, Integer> opponentPlacements,
+                         Map<String, String> lossReasons, String allPlacementsStr) {
             this.winner = winner;
             this.turns = turns;
             this.isDraw = isDraw;
             this.opponentPlacements = opponentPlacements;
+            this.lossReasons = lossReasons;
+            this.allPlacementsStr = allPlacementsStr;
         }
     }
 
@@ -793,6 +830,8 @@ public class DeckTester {
                 int turns = 0;
                 boolean isDraw = false;
                 Map<String, Integer> opponentPlacements = new HashMap<>();
+                Map<String, String> lossReasons = new HashMap<>();
+                String allPlacementsStr = "";
 
                 for (String part : parts) {
                     String[] kv = part.split("=", 2);
@@ -808,25 +847,33 @@ public class DeckTester {
                                 isDraw = Boolean.parseBoolean(kv[1]);
                                 break;
                             case "placements":
-                                // Parse: name:placement:life|name:placement:life|...
+                                // Parse: name:placement:life:lossReason|name:placement:life:lossReason|...
                                 String[] playerData = kv[1].split("\\|");
                                 for (String pd : playerData) {
                                     String[] fields = pd.split(":");
-                                    if (fields.length == 3) {
+                                    if (fields.length >= 3) {
                                         String name = fields[0];
                                         int placement = Integer.parseInt(fields[1]);
+                                        String lossReason = fields.length >= 4 ? fields[3] : null;
                                         // Skip the input deck, only store opponent placements
                                         if (!"Input Deck".equals(name)) {
                                             opponentPlacements.put(name, placement);
+                                            if (lossReason != null && !lossReason.equals("Winner")) {
+                                                lossReasons.put(name, lossReason);
+                                            }
+                                        } else if (lossReason != null && !lossReason.equals("Winner")) {
+                                            // Track Input Deck's loss reason too
+                                            lossReasons.put(name, lossReason);
                                         }
                                     }
                                 }
+                                allPlacementsStr = kv[1]; // Store raw placements for CSV
                                 break;
                         }
                     }
                 }
 
-                return new SimpleGameResult(winner, turns, isDraw, opponentPlacements);
+                return new SimpleGameResult(winner, turns, isDraw, opponentPlacements, lossReasons, allPlacementsStr);
             }
         }
 
@@ -1194,8 +1241,18 @@ public class DeckTester {
                     }
                     for (String playerName : previousActivePlayers) {
                         if (!currentActivePlayers.contains(playerName) && !eliminationOrder.containsKey(playerName)) {
-                            // This player was eliminated
+                            // This player was eliminated - find them in registered players to get loss reason
                             eliminationOrder.put(playerName, nextEliminationPosition++);
+
+                            // Get loss reason from registered players list
+                            for (Player regPlayer : game.getRegisteredPlayers()) {
+                                if (regPlayer.getName().equals(playerName) && regPlayer.getOutcome() != null) {
+                                    String reason = regPlayer.getOutcome().lossState != null ?
+                                        regPlayer.getOutcome().lossState.toString() : "Unknown";
+                                    eliminationReasons.put(playerName, reason);
+                                    break;
+                                }
+                            }
                         }
                     }
                     previousActivePlayers = currentActivePlayers;
