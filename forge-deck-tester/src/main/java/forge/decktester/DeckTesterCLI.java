@@ -446,9 +446,13 @@ public class DeckTesterCLI {
             // Use weighted color statistics from TestResults
             Map<String, DeckTester.ColorWeightedStats> colorStats = results.colorStats;
 
+            // Show color legend
+            System.out.println("\nColor Legend: W=White, U=Blue, B=Black, R=Red, G=Green, C=Colorless");
+
             // Show overall color presence (only colors actually faced) with weighted scoring
             System.out.println("\nColor Identity Breakdown (Weighted by Placement):");
             System.out.println("Note: Scores weighted by finish position - 1st=3pts, 2nd=2pts, 3rd=1pt");
+            System.out.println("Win Rate = Your performance against this color combination");
             System.out.printf("%-15s %8s %10s %11s %14s%n", "Colors", "Games", "Win Rate", "Avg Rounds", "Score (W-L)");
             System.out.println("-".repeat(80));
             colorStats.entrySet().stream()
@@ -456,13 +460,17 @@ public class DeckTesterCLI {
                     .sorted((a, b) -> Integer.compare(b.getValue().totalGames, a.getValue().totalGames))
                     .forEach(entry -> {
                         DeckTester.ColorWeightedStats stats = entry.getValue();
-                        System.out.printf("%-15s %8d  %9.1f%%  %10.1f  %5.1f-%5.1f%n",
+                        // Invert: weightedLosses = YOUR wins against this color
+                        double yourWinRate = (stats.weightedLosses + stats.weightedWins) > 0
+                            ? stats.weightedLosses / (stats.weightedLosses + stats.weightedWins)
+                            : 0.0;
+                        System.out.printf("%-15s %8d  %9.1f%%  %10.1f  %.1f-%.1f%n",
                                 entry.getKey(),
                                 stats.totalGames,
-                                stats.getWinRate() * 100,
+                                yourWinRate * 100,
                                 stats.getAverageRounds(),
-                                stats.weightedWins,
-                                stats.weightedLosses);
+                                stats.weightedLosses,  // Your wins
+                                stats.weightedWins);   // Your losses
                     });
 
             // Show best matchups (colors you beat most often)
@@ -471,13 +479,19 @@ public class DeckTesterCLI {
             System.out.println("-".repeat(80));
             colorStats.entrySet().stream()
                     .filter(e -> e.getValue().totalGames >= 5) // Minimum sample
-                    .sorted((a, b) -> Double.compare(b.getValue().getWinRate(), a.getValue().getWinRate()))
+                    .sorted((a, b) -> {
+                        // Sort by YOUR win rate (inverted)
+                        double aRate = a.getValue().weightedLosses / (a.getValue().weightedLosses + a.getValue().weightedWins);
+                        double bRate = b.getValue().weightedLosses / (b.getValue().weightedLosses + b.getValue().weightedWins);
+                        return Double.compare(bRate, aRate);
+                    })
                     .limit(5)
                     .forEach(entry -> {
                         DeckTester.ColorWeightedStats stats = entry.getValue();
+                        double yourWinRate = stats.weightedLosses / (stats.weightedLosses + stats.weightedWins);
                         System.out.printf("%-15s %9.1f%%  %3d games%n",
                                 entry.getKey(),
-                                stats.getWinRate() * 100,
+                                yourWinRate * 100,
                                 stats.totalGames);
                     });
 
@@ -487,13 +501,19 @@ public class DeckTesterCLI {
             System.out.println("-".repeat(80));
             colorStats.entrySet().stream()
                     .filter(e -> e.getValue().totalGames >= 5) // Minimum sample
-                    .sorted((a, b) -> Double.compare(a.getValue().getWinRate(), b.getValue().getWinRate()))
+                    .sorted((a, b) -> {
+                        // Sort by YOUR win rate (inverted) - lowest first
+                        double aRate = a.getValue().weightedLosses / (a.getValue().weightedLosses + a.getValue().weightedWins);
+                        double bRate = b.getValue().weightedLosses / (b.getValue().weightedLosses + b.getValue().weightedWins);
+                        return Double.compare(aRate, bRate);
+                    })
                     .limit(5)
                     .forEach(entry -> {
                         DeckTester.ColorWeightedStats stats = entry.getValue();
+                        double yourWinRate = stats.weightedLosses / (stats.weightedLosses + stats.weightedWins);
                         System.out.printf("%-15s %9.1f%%  %3d games%n",
                                 entry.getKey(),
-                                stats.getWinRate() * 100,
+                                yourWinRate * 100,
                                 stats.totalGames);
                     });
         } else {
