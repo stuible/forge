@@ -90,6 +90,9 @@ public class DeckTesterCLI {
             // Run the game and track all players' states from the game BEFORE it ends
             forge.game.Game game = tester.playGameMultiplayerReturnGame(inputDeck, opponentDecks);
 
+            // Get elimination order tracked during the game
+            Map<String, Integer> eliminationOrder = tester.getEliminationOrder();
+
             // Capture player states from the game's registered players list BEFORE getting outcome
             // (game.getPlayers() becomes empty after game ends, but we can get them from game.getRegisteredPlayers())
             List<PlayerPlacement> placements = new ArrayList<>();
@@ -97,7 +100,9 @@ public class DeckTesterCLI {
                 String playerName = p.getName();
                 boolean won = p.getOutcome().hasWon();
                 int life = p.getLife();
-                placements.add(new PlayerPlacement(playerName, won, life));
+                // Get elimination position (0 = winner/not eliminated, higher = eliminated earlier)
+                int elimPosition = eliminationOrder.getOrDefault(playerName, 0);
+                placements.add(new PlayerPlacement(playerName, won, life, elimPosition));
             }
 
             forge.game.GameOutcome outcome = game.getOutcome();
@@ -110,12 +115,17 @@ public class DeckTesterCLI {
             int turns = outcome.getLastTurnNumber();
             boolean isDraw = outcome.isDraw();
 
-            // Sort: winners first (by life desc), then losers (by life desc)
+            // Sort: winners first, then losers by elimination order (higher = eliminated later = better placement)
             placements.sort((a, b) -> {
                 if (a.won != b.won) {
                     return a.won ? -1 : 1; // Winners before losers
                 }
-                return Integer.compare(b.life, a.life); // Higher life first
+                // Among losers: higher elimination position = eliminated later = better placement
+                // elimPosition 0 means winner (shouldn't happen here), 1 = first out, 2 = second out, etc.
+                if (a.eliminationPosition != b.eliminationPosition) {
+                    return Integer.compare(b.eliminationPosition, a.eliminationPosition); // Higher position = better
+                }
+                return Integer.compare(b.life, a.life); // Fallback to life total
             });
 
             // Build placement string: name:placement:life|name:placement:life|...
@@ -873,11 +883,17 @@ public class DeckTesterCLI {
         final String name;
         final boolean won;
         final int life;
+        final int eliminationPosition; // 0 = winner, 1 = first eliminated, 2 = second, etc.
 
         PlayerPlacement(String name, boolean won, int life) {
+            this(name, won, life, 0);
+        }
+
+        PlayerPlacement(String name, boolean won, int life, int eliminationPosition) {
             this.name = name;
             this.won = won;
             this.life = life;
+            this.eliminationPosition = eliminationPosition;
         }
     }
 

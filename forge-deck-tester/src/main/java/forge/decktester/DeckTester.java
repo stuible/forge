@@ -63,6 +63,12 @@ public class DeckTester {
     // Progress output stream for worker processes
     private PrintStream progressOut = null;
 
+    // Elimination order tracking for multiplayer games
+    // Maps player name -> elimination position (1 = first eliminated, higher = eliminated later)
+    // Winner is not in this map (they weren't eliminated)
+    private final Map<String, Integer> eliminationOrder = new ConcurrentHashMap<>();
+    private volatile int nextEliminationPosition = 1;
+
     // Active game tracking for unified display
     private final Map<String, GameState> activeGames = new ConcurrentHashMap<>();
     private volatile boolean displayRunning = false;
@@ -98,6 +104,23 @@ public class DeckTester {
      */
     public void setProgressOutputStream(PrintStream out) {
         this.progressOut = out;
+    }
+
+    /**
+     * Get the elimination order map from the last game.
+     * Maps player name -> elimination position (1 = first eliminated, higher = later).
+     * Winner is not in this map.
+     */
+    public Map<String, Integer> getEliminationOrder() {
+        return new HashMap<>(eliminationOrder);
+    }
+
+    /**
+     * Clear elimination tracking for a new game.
+     */
+    private void clearEliminationTracking() {
+        eliminationOrder.clear();
+        nextEliminationPosition = 1;
     }
 
     /**
@@ -776,6 +799,9 @@ public class DeckTester {
     private forge.game.Game playGameMultiplayerInternal(Deck inputDeck, List<Deck> opponentDecks) throws TimeoutException {
         // Handle both 1v1 and multiplayer cases
 
+        // Clear elimination tracking for new game
+        clearEliminationTracking();
+
         // Multiplayer setup
         boolean isCommander = isCommanderDeck(inputDeck);
         int numPlayers = opponentDecks.size() + 1; // Input deck + opponents
@@ -1030,6 +1056,9 @@ public class DeckTester {
             outputProgress(state);
         }
 
+        // Track which players are still active for elimination detection
+        Set<String> previousActivePlayers = new HashSet<>(state.playerNames);
+
         try {
             String lastPhase = "Starting";
             long phaseStartTime = System.currentTimeMillis();
@@ -1072,6 +1101,19 @@ public class DeckTester {
                     // Update all player life totals and check if Input Deck is eliminated
                     List<Player> players = new ArrayList<>(game.getPlayers());
                     Player inputDeckPlayer = null;
+
+                    // Track eliminations: check which players are no longer in the active list
+                    Set<String> currentActivePlayers = new HashSet<>();
+                    for (Player p : players) {
+                        currentActivePlayers.add(p.getName());
+                    }
+                    for (String playerName : previousActivePlayers) {
+                        if (!currentActivePlayers.contains(playerName) && !eliminationOrder.containsKey(playerName)) {
+                            // This player was eliminated
+                            eliminationOrder.put(playerName, nextEliminationPosition++);
+                        }
+                    }
+                    previousActivePlayers = currentActivePlayers;
 
                     for (int i = 0; i < players.size(); i++) {
                         if (i < state.playerLives.size()) {
