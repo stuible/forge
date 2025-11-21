@@ -451,7 +451,9 @@ public class DeckTesterCLI {
 
             // Show overall color presence (only colors actually faced) with weighted scoring
             System.out.println("\nColor Identity Breakdown (Weighted by Placement):");
-            System.out.println("Note: Scores weighted by finish position - 1st=3pts, 2nd=2pts, 3rd=1pt");
+            System.out.println("Note: Scores weighted by placement - higher placement = more points");
+            System.out.println("      Formula: points = (total_players - placement)");
+            System.out.println("      Example: 4-player: 1st=3pts, 2nd=2pts, 3rd=1pt, 4th=0pts");
             System.out.println("Win Rate = Your performance against this color combination");
             System.out.printf("%-15s %8s %10s %11s %14s%n", "Colors", "Games", "Win Rate", "Avg Rounds", "Score (W-L)");
             System.out.println("-".repeat(80));

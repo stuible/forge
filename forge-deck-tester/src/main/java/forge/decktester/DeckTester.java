@@ -305,8 +305,9 @@ public class DeckTester {
                                         }
                                     }
 
+                                    int totalPlayers = opponents.size() + 1; // opponents + input deck
                                     colorStats.putIfAbsent(color, new ColorWeightedStats());
-                                    colorStats.get(color).addWeightedWin(placement);
+                                    colorStats.get(color).addWeightedWin(placement, totalPlayers);
                                     colorStats.get(color).totalTurns += gameResult.turns;
                                 }
                             } else {
@@ -334,8 +335,9 @@ public class DeckTester {
                                         }
                                     }
 
+                                    int totalPlayers = opponents.size() + 1; // opponents + input deck
                                     colorStats.putIfAbsent(color, new ColorWeightedStats());
-                                    colorStats.get(color).addWeightedLoss(placement);
+                                    colorStats.get(color).addWeightedLoss(placement, totalPlayers);
                                     colorStats.get(color).totalTurns += gameResult.turns;
                                 }
                             }
@@ -1429,25 +1431,29 @@ public class DeckTester {
         public int totalGames = 0; // Total games where this color was faced
         public long totalTurns = 0;
 
-        public void addWeightedWin(int placement) {
+        public void addWeightedWin(int placement, int totalPlayers) {
             // When we WIN, opponent gets weighted LOSS based on their placement
             // Higher placement (eliminated first) = more weight
-            int weight = calculateWeight(placement);
+            double weight = calculateWeight(placement, totalPlayers);
             weightedLosses += weight;
             totalGames++;
         }
 
-        public void addWeightedLoss(int placement) {
+        public void addWeightedLoss(int placement, int totalPlayers) {
             // When we LOSE, opponent gets weighted WIN based on their placement
             // Lower placement (better finish) = more weight
-            int weight = calculateWeight(placement);
+            double weight = calculateWeight(placement, totalPlayers);
             weightedWins += weight;
             totalGames++;
         }
 
-        private int calculateWeight(int placement) {
-            // 1st place = 3 points, 2nd = 2, 3rd = 1, 4th+ = 1
-            return Math.max(1, 4 - placement);
+        private double calculateWeight(int placement, int totalPlayers) {
+            // Dynamic weighting based on player count:
+            // 2 players: 1st=1, 2nd=0
+            // 3 players: 1st=2, 2nd=1, 3rd=0
+            // 4 players: 1st=3, 2nd=2, 3rd=1, 4th=0
+            // Formula: (totalPlayers - placement)
+            return Math.max(0, totalPlayers - placement);
         }
 
         public double getWinRate() {
