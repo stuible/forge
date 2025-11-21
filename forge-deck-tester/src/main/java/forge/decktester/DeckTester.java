@@ -27,6 +27,7 @@ import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -73,6 +74,48 @@ public class DeckTester {
     private final Map<String, GameState> activeGames = new ConcurrentHashMap<>();
     private volatile boolean displayRunning = false;
     private Thread displayThread = null;
+
+    // Current test results (for partial results on early exit)
+    private volatile Map<String, MatchupResult> currentMatchupResults = new ConcurrentHashMap<>();
+    private volatile Map<String, ColorWeightedStats> currentColorStats = new ConcurrentHashMap<>();
+
+    // Per-game results for CSV export
+    private final List<GameRecord> gameRecords = Collections.synchronizedList(new ArrayList<>());
+
+    /**
+     * Record of a single game for CSV export.
+     */
+    public static class GameRecord {
+        public final String timestamp;
+        public final String testDeck;
+        public final String opponent;
+        public final String opponentColors;
+        public final String result; // "WIN", "LOSS", "DRAW", "ERROR"
+        public final int turns;
+        public final int placement; // 1 = 1st place, 2 = 2nd, etc.
+        public final int totalPlayers;
+        public final String allPlacements; // "Player1:1,Player2:2,..." for multiplayer
+
+        public GameRecord(String testDeck, String opponent, String opponentColors, String result,
+                          int turns, int placement, int totalPlayers, String allPlacements) {
+            this.timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
+            this.testDeck = testDeck;
+            this.opponent = opponent;
+            this.opponentColors = opponentColors;
+            this.result = result;
+            this.turns = turns;
+            this.placement = placement;
+            this.totalPlayers = totalPlayers;
+            this.allPlacements = allPlacements;
+        }
+    }
+
+    /**
+     * Get all game records from the current test run.
+     */
+    public List<GameRecord> getGameRecords() {
+        return new ArrayList<>(gameRecords);
+    }
 
     // Game state snapshot for display
     private static class GameState {
@@ -135,6 +178,17 @@ public class DeckTester {
      */
     public void cancel() {
         this.cancelled = true;
+    }
+
+    /**
+     * Get partial results from the current (possibly interrupted) test run.
+     * Returns null if no test is running or no results are available.
+     */
+    public TestResults getPartialResults() {
+        if (currentMatchupResults == null || currentMatchupResults.isEmpty()) {
+            return null;
+        }
+        return new TestResults(testDeckName, new HashMap<>(currentMatchupResults), new HashMap<>(currentColorStats));
     }
 
     /**
@@ -218,6 +272,7 @@ public class DeckTester {
         totalErrors = 0;
         totalGamesExpected = opponentDecks.size() * gamesPerMatchup;
         activeGames.clear();
+        gameRecords.clear(); // Clear per-game records for new test
         cancelled = false;
         testDeckName = testDeck.getName();
 
@@ -236,8 +291,9 @@ public class DeckTester {
 
         Map<String, MatchupResult> results = new ConcurrentHashMap<>();
 
-        // Create matchup results tracking
-        Map<String, MatchupResult> matchupResults = new ConcurrentHashMap<>();
+        // Create matchup results tracking (use instance fields for partial results access)
+        currentMatchupResults = new ConcurrentHashMap<>();
+        Map<String, MatchupResult> matchupResults = currentMatchupResults;
         for (Deck opponent : opponentDecks) {
             MatchupResult result = new MatchupResult(testDeck.getName(), opponent.getName());
             // Set number of players for each matchup
@@ -248,8 +304,9 @@ public class DeckTester {
             matchupResults.put(opponent.getName(), result);
         }
 
-        // Create weighted color statistics tracking for multiplayer
-        Map<String, ColorWeightedStats> colorStats = new ConcurrentHashMap<>();
+        // Create weighted color statistics tracking for multiplayer (use instance field)
+        currentColorStats = new ConcurrentHashMap<>();
+        Map<String, ColorWeightedStats> colorStats = currentColorStats;
 
         // Submit all individual games to thread pool (not matchups)
         List<Future<Void>> futures = new ArrayList<>();
@@ -367,6 +424,22 @@ public class DeckTester {
                             }
 
                             result.totalTurns += gameResult.turns;
+
+                            // Record game for CSV export
+                            String resultType = gameResult.isDraw ? "DRAW" :
+                                ("Input Deck".equals(gameResult.winner) ? "WIN" : "LOSS");
+                            int placement = "Input Deck".equals(gameResult.winner) ? 1 :
+                                (gameResult.isDraw ? 0 : opponents.size() + 1); // Last place if lost
+                            String primaryOppColor = getDeckColorIdentity(oppDeck);
+                            StringBuilder allPlacements = new StringBuilder();
+                            for (Map.Entry<String, Integer> entry : gameResult.opponentPlacements.entrySet()) {
+                                if (allPlacements.length() > 0) allPlacements.append(";");
+                                allPlacements.append(entry.getKey()).append(":").append(entry.getValue());
+                            }
+                            gameRecords.add(new GameRecord(
+                                testDeckName, oppDeck.getName(), primaryOppColor, resultType,
+                                gameResult.turns, placement, opponents.size() + 1, allPlacements.toString()
+                            ));
                         }
 
                     } catch (TimeoutException e) {
@@ -380,6 +453,11 @@ public class DeckTester {
                                 totalGamesPlayed++;
                             }
                         }
+                        // Record error for CSV
+                        gameRecords.add(new GameRecord(
+                            testDeckName, oppDeck.getName(), getDeckColorIdentity(oppDeck), "ERROR",
+                            0, 0, players, "TIMEOUT"
+                        ));
                     } catch (Exception e) {
                         System.err.println("Game vs " + oppDeck.getName() + " error: " + e.getClass().getSimpleName() + ": " + e.getMessage());
                         synchronized (result) {
@@ -389,6 +467,13 @@ public class DeckTester {
                                 totalGamesPlayed++;
                             }
                         }
+                        // Record error for CSV
+                        boolean isCmd = isCommanderDeck(testDeck) || isCommanderDeck(oppDeck);
+                        int players = isCmd ? commanderOpponents + 1 : 2;
+                        gameRecords.add(new GameRecord(
+                            testDeckName, oppDeck.getName(), getDeckColorIdentity(oppDeck), "ERROR",
+                            0, 0, players, e.getClass().getSimpleName()
+                        ));
                     }
 
                     gamesCompleted.incrementAndGet();

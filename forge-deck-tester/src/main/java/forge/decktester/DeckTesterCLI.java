@@ -236,7 +236,7 @@ public class DeckTesterCLI {
             // Step 4: Run tests
             System.out.println("AI Profile: " + options.aiProfile);
             if (options.showLiveProgress) {
-                System.out.println("Live Progress: Enabled");
+                System.out.println("Live Progress: Enabled (Press Ctrl+C to stop early and see results)");
             }
             System.out.println();
 
@@ -249,11 +249,59 @@ public class DeckTesterCLI {
             if (options.showLiveProgress) {
                 tester.setDirectOutputStream(originalOut);
             }
-            TestResults testResults = tester.testDeck(
-                    testDeck,
-                    opponentDecks,
-                    options.gamesPerMatchup
-            );
+
+            // Set up Ctrl+C handler for early exit
+            final boolean[] interrupted = {false};
+            final Options finalOptions = options;
+            final DeckTester finalTester = tester;
+            final long[] finalStartTime = {startTime};
+            final PrintStream finalOriginalOut = originalOut;
+
+            Thread shutdownHook = new Thread(() -> {
+                if (!interrupted[0]) {
+                    interrupted[0] = true;
+                    finalTester.cancel();
+                    // Small delay to let cancel propagate
+                    try { Thread.sleep(500); } catch (InterruptedException e) {}
+
+                    // Print partial results
+                    finalOriginalOut.println("\n\n");
+                    finalOriginalOut.println("=".repeat(80));
+                    finalOriginalOut.println("  TEST INTERRUPTED - Showing partial results");
+                    finalOriginalOut.println("=".repeat(80));
+
+                    TestResults partial = finalTester.getPartialResults();
+                    if (partial != null) {
+                        long duration = (System.currentTimeMillis() - finalStartTime[0]) / 1000;
+                        // Restore stdout for printing
+                        System.setOut(finalOriginalOut);
+                        printResults(partial, finalOptions, duration);
+                    } else {
+                        finalOriginalOut.println("No results collected yet.");
+                    }
+                }
+            });
+            Runtime.getRuntime().addShutdownHook(shutdownHook);
+
+            TestResults testResults;
+            try {
+                testResults = tester.testDeck(
+                        testDeck,
+                        opponentDecks,
+                        options.gamesPerMatchup
+                );
+            } finally {
+                // Remove shutdown hook if we completed normally
+                try {
+                    Runtime.getRuntime().removeShutdownHook(shutdownHook);
+                } catch (IllegalStateException e) {
+                    // JVM already shutting down, ignore
+                }
+            }
+
+            if (interrupted[0]) {
+                return; // Results already printed by shutdown hook
+            }
 
             long endTime = System.currentTimeMillis();
             long duration = (endTime - startTime) / 1000;
@@ -265,6 +313,9 @@ public class DeckTesterCLI {
             if (options.outputFile != null) {
                 saveResults(testResults, options);
             }
+
+            // Step 6: Save per-game CSV report
+            saveGameRecordsCSV(tester, testResults.deckName);
 
         } finally {
             tester.shutdown();
@@ -622,6 +673,56 @@ public class DeckTesterCLI {
     }
 
     /**
+     * Save per-game CSV report with details about every game played.
+     */
+    private static void saveGameRecordsCSV(DeckTester tester, String deckName) {
+        List<DeckTester.GameRecord> records = tester.getGameRecords();
+        if (records.isEmpty()) {
+            return;
+        }
+
+        // Generate filename with timestamp
+        String timestamp = new SimpleDateFormat("yyyy-MM-dd_HHmmss").format(new Date());
+        String sanitizedName = deckName.replaceAll("[^a-zA-Z0-9_\\-]", "_");
+        String filename = "test_report_" + sanitizedName + "_" + timestamp + ".csv";
+
+        try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
+            // CSV Header
+            writer.println("Timestamp,TestDeck,Opponent,OpponentColors,Result,Turns,Placement,TotalPlayers,AllPlacements");
+
+            // Write each game record
+            for (DeckTester.GameRecord record : records) {
+                writer.printf("%s,%s,%s,%s,%s,%d,%d,%d,%s%n",
+                    escapeCSV(record.timestamp),
+                    escapeCSV(record.testDeck),
+                    escapeCSV(record.opponent),
+                    escapeCSV(record.opponentColors),
+                    record.result,
+                    record.turns,
+                    record.placement,
+                    record.totalPlayers,
+                    escapeCSV(record.allPlacements)
+                );
+            }
+
+            System.out.println("\nPer-game report saved to: " + filename);
+        } catch (IOException e) {
+            System.err.println("Failed to save per-game report: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Escape a string for CSV (quote if contains comma, quote, or newline).
+     */
+    private static String escapeCSV(String value) {
+        if (value == null) return "";
+        if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
+    }
+
+    /**
      * Parse command-line arguments.
      */
     private static Options parseArgs(String[] args) {
@@ -705,6 +806,10 @@ public class DeckTesterCLI {
 
                 case "--live":
                     options.showLiveProgress = true;
+                    break;
+
+                case "--no-live":
+                    options.showLiveProgress = false;
                     break;
 
                 case "--verbose":
@@ -797,7 +902,7 @@ public class DeckTesterCLI {
         System.out.println("  --top NUM                Number of top decks to download (default: " + DEFAULT_TOP_DECKS + ")");
         System.out.println("  -o, --output FILE        Save results to CSV file");
         System.out.println("  --ai-profile PROFILE     AI playstyle (Default, Cautious, Reckless, Experimental) [default: Reckless]");
-        System.out.println("  --live                   Show live game progress (turn, phase, life totals)");
+        System.out.println("  --no-live                Disable live dashboard (enabled by default)");
         System.out.println("  --commander-opponents N  Number of AI opponents in Commander (1-4, default: 1)");
         System.out.println();
         System.out.println("Cache Options:");
@@ -863,7 +968,7 @@ public class DeckTesterCLI {
         int topDecksCount = DEFAULT_TOP_DECKS;
         String outputFile = null;
         String aiProfile = "Reckless"; // Default to Reckless for faster, more aggressive games
-        boolean showLiveProgress = false;
+        boolean showLiveProgress = true; // Live dashboard on by default
         boolean verbose = false;
         boolean showHelp = false;
         boolean showVersion = false;
