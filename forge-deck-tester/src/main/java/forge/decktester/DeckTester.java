@@ -717,6 +717,8 @@ public class DeckTester {
                     }
                 }
 
+                // Debug: show what we parsed
+                System.err.println("DEBUG parseGameResult: opponentPlacements=" + opponentPlacements);
                 return new SimpleGameResult(winner, turns, isDraw, opponentPlacements);
             }
         }
@@ -1431,19 +1433,21 @@ public class DeckTester {
         public int totalGames = 0; // Total games where this color was faced
         public long totalTurns = 0;
 
-        public void addWeightedWin(int placement, int totalPlayers) {
-            // When we WIN, opponent gets weighted LOSS based on their placement
-            // Higher placement (eliminated first) = more weight
-            double weight = calculateWeight(placement, totalPlayers);
-            weightedLosses += weight;
+        public void addWeightedWin(int opponentPlacement, int totalPlayers) {
+            // When we WIN against an opponent:
+            // We get points based on OUR finish (1st place)
+            // Points = totalPlayers - 1 (since we finished 1st)
+            double weight = totalPlayers - 1;
+            weightedLosses += weight; // Track YOUR wins
             totalGames++;
         }
 
-        public void addWeightedLoss(int placement, int totalPlayers) {
-            // When we LOSE, opponent gets weighted WIN based on their placement
-            // Lower placement (better finish) = more weight
-            double weight = calculateWeight(placement, totalPlayers);
-            weightedWins += weight;
+        public void addWeightedLoss(int opponentPlacement, int totalPlayers) {
+            // When we LOSE to an opponent:
+            // Opponent gets points based on THEIR finish placement
+            // Better placement = more points
+            double weight = calculateWeight(opponentPlacement, totalPlayers);
+            weightedWins += weight; // Track YOUR losses (opponent's wins)
             totalGames++;
         }
 
