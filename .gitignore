@@ -35,6 +35,7 @@ test-output
 bin
 gen
 *.log
+.logs
 
 # Ignore macOS Spotlight rubbish
 .DS_Store
