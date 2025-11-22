@@ -478,8 +478,9 @@ public class DeckTester {
                                 totalGamesPlayed++;
                             }
                         }
-                        // Record error for CSV - include opponent info even for errors
-                        List<PlayerResult> errorOpponents = buildOpponentResultsFromDecks(opponents, "TIMEOUT");
+                        // Record error for CSV - just use primary opponent since we don't have full opponent list
+                        List<PlayerResult> errorOpponents = Collections.singletonList(
+                            new PlayerResult(oppDeck.getName(), getDeckColorIdentity(oppDeck), 0, 0, "TIMEOUT"));
                         gameRecords.add(new GameRecord(
                             testDeckName, "ERROR", 0, 0, "TIMEOUT", errorOpponents
                         ));
@@ -492,8 +493,9 @@ public class DeckTester {
                                 totalGamesPlayed++;
                             }
                         }
-                        // Record error for CSV - include opponent info even for errors
-                        List<PlayerResult> errorOpponents = buildOpponentResultsFromDecks(opponents, e.getClass().getSimpleName());
+                        // Record error for CSV - just use primary opponent since we don't have full opponent list
+                        List<PlayerResult> errorOpponents = Collections.singletonList(
+                            new PlayerResult(oppDeck.getName(), getDeckColorIdentity(oppDeck), 0, 0, e.getClass().getSimpleName()));
                         gameRecords.add(new GameRecord(
                             testDeckName, "ERROR", 0, 0, e.getClass().getSimpleName(), errorOpponents
                         ));
@@ -611,7 +613,10 @@ public class DeckTester {
         List<PlayerResult> results = new ArrayList<>();
         if (allPlacementsStr == null || allPlacementsStr.isEmpty()) {
             // Fallback: create basic results from opponents list
-            return buildOpponentResultsFromDecks(opponents, null);
+            for (Deck opp : opponents) {
+                results.add(new PlayerResult(opp.getName(), getDeckColorIdentity(opp), 0, 0, null));
+            }
+            return results;
         }
 
         // Parse the placements string
@@ -657,16 +662,6 @@ public class DeckTester {
         return results;
     }
 
-    /**
-     * Build opponent results from deck list (for error cases where no game was played).
-     */
-    private List<PlayerResult> buildOpponentResultsFromDecks(List<Deck> opponents, String reason) {
-        List<PlayerResult> results = new ArrayList<>();
-        for (Deck opp : opponents) {
-            results.add(new PlayerResult(opp.getName(), getDeckColorIdentity(opp), 0, 0, reason));
-        }
-        return results;
-    }
 
     /**
      * Simple result structure for game outcomes.
