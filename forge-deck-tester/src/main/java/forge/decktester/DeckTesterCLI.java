@@ -117,7 +117,7 @@ public class DeckTesterCLI {
 
             // Output result in parseable format
             String winner = outcome.isDraw() ? "null" : outcome.getWinningLobbyPlayer().getName();
-            int turns = outcome.getLastTurnNumber();
+            int rounds = tester.getLastGameRounds();
             boolean isDraw = outcome.isDraw();
 
             // Sort: winners first, then losers by elimination order (higher = eliminated later = better placement)
@@ -142,7 +142,7 @@ public class DeckTesterCLI {
                 placementStr.append(p.name).append(":").append(i + 1).append(":").append(p.life).append(":").append(reason);
             }
 
-            originalOut.println("RESULT:winner=" + winner + ",turns=" + turns + ",draw=" + isDraw + ",placements=" + placementStr);
+            originalOut.println("RESULT:winner=" + winner + ",rounds=" + rounds + ",draw=" + isDraw + ",placements=" + placementStr);
             originalOut.flush();
             System.exit(0);
 
@@ -711,7 +711,7 @@ public class DeckTesterCLI {
 
             // CSV Header - dynamic based on max opponents
             StringBuilder header = new StringBuilder();
-            header.append("Timestamp,TestDeck,Result,MyPlacement,MyLossReason,Turns");
+            header.append("Timestamp,TestDeck,Result,MyPlacement,MyLossReason,Rounds");
             for (int i = 1; i <= maxOpponents; i++) {
                 header.append(",Opp").append(i).append("Name");
                 header.append(",Opp").append(i).append("Colors");
@@ -728,7 +728,7 @@ public class DeckTesterCLI {
                 row.append(record.result).append(",");
                 row.append(record.myPlacement).append(",");
                 row.append(record.myLossReason != null ? record.myLossReason : "").append(",");
-                row.append(record.turns);
+                row.append(record.rounds);
 
                 // Add opponent columns
                 for (int i = 0; i < maxOpponents; i++) {

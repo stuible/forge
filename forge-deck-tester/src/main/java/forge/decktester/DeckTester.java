@@ -83,6 +83,16 @@ public class DeckTester {
     // Per-game results for CSV export
     private final List<GameRecord> gameRecords = Collections.synchronizedList(new ArrayList<>());
 
+    // Rounds count from the last game played
+    private volatile int lastGameRounds = 0;
+
+    /**
+     * Get the number of rounds from the last game played.
+     */
+    public int getLastGameRounds() {
+        return lastGameRounds;
+    }
+
     /**
      * Data about a single player's result in a game.
      */
@@ -109,17 +119,17 @@ public class DeckTester {
         public final String timestamp;
         public final String testDeck;
         public final String result; // "WIN", "LOSS", "DRAW", "ERROR"
-        public final int turns;
+        public final int rounds;
         public final int myPlacement; // 1 = 1st place, 2 = 2nd, etc.
         public final String myLossReason; // null if won
         public final List<PlayerResult> opponents; // All opponents with their results
 
-        public GameRecord(String testDeck, String result, int turns, int myPlacement,
+        public GameRecord(String testDeck, String result, int rounds, int myPlacement,
                           String myLossReason, List<PlayerResult> opponents) {
             this.timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
             this.testDeck = testDeck;
             this.result = result;
-            this.turns = turns;
+            this.rounds = rounds;
             this.myPlacement = myPlacement;
             this.myLossReason = myLossReason;
             this.opponents = opponents != null ? new ArrayList<>(opponents) : new ArrayList<>();
@@ -136,6 +146,7 @@ public class DeckTester {
     // Game state snapshot for display
     private static class GameState {
         volatile int turn = 0;
+        volatile int rounds = 0;
         volatile String phase = "Starting";
         volatile List<Integer> playerLives = new ArrayList<>();
         volatile List<String> playerNames = new ArrayList<>();
@@ -143,6 +154,7 @@ public class DeckTester {
         volatile String opponentName = "";
         volatile boolean isCommander = false;
         volatile int numPlayers = 2;
+        volatile String firstPlayerName = ""; // Track first player to count rounds
     }
 
     public DeckTester() {
@@ -374,7 +386,7 @@ public class DeckTester {
                             GameOutcome outcome = playGameMultiplayer(testDeck, opponents);
                             gameResult = new SimpleGameResult(
                                 outcome.isDraw() ? null : outcome.getWinningLobbyPlayer().getName(),
-                                outcome.getLastTurnNumber(),
+                                lastGameRounds, // Use rounds tracked during game monitoring
                                 outcome.isDraw()
                             );
                         }
@@ -414,7 +426,7 @@ public class DeckTester {
                                     int totalPlayers = opponents.size() + 1; // opponents + input deck
                                     colorStats.putIfAbsent(color, new ColorWeightedStats());
                                     colorStats.get(color).addWeightedWin(placement, totalPlayers);
-                                    colorStats.get(color).totalTurns += gameResult.turns;
+                                    colorStats.get(color).totalTurns += gameResult.rounds;
                                 }
                             } else {
                                 result.losses++;
@@ -444,11 +456,11 @@ public class DeckTester {
                                     int totalPlayers = opponents.size() + 1; // opponents + input deck
                                     colorStats.putIfAbsent(color, new ColorWeightedStats());
                                     colorStats.get(color).addWeightedLoss(placement, totalPlayers);
-                                    colorStats.get(color).totalTurns += gameResult.turns;
+                                    colorStats.get(color).totalTurns += gameResult.rounds;
                                 }
                             }
 
-                            result.totalTurns += gameResult.turns;
+                            result.totalTurns += gameResult.rounds;
 
                             // Record game for CSV export
                             String resultType = gameResult.isDraw ? "DRAW" :
@@ -462,7 +474,7 @@ public class DeckTester {
                                 gameResult.allPlacementsStr, opponents, gameResult.lossReasons);
 
                             gameRecords.add(new GameRecord(
-                                testDeckName, resultType, gameResult.turns, myPlacement,
+                                testDeckName, resultType, gameResult.rounds, myPlacement,
                                 myLossReason, opponentResults
                             ));
                         }
@@ -668,24 +680,24 @@ public class DeckTester {
      */
     private static class SimpleGameResult {
         final String winner;  // "Input Deck", "Opponent 1", or null for draw
-        final int turns;
+        final int rounds;
         final boolean isDraw;
         final Map<String, Integer> opponentPlacements; // Opponent name -> placement (1st, 2nd, 3rd)
         final Map<String, String> lossReasons; // Player name -> loss reason (e.g., "CommanderDamage")
         final String allPlacementsStr; // Full placements string for CSV
 
-        SimpleGameResult(String winner, int turns, boolean isDraw) {
-            this(winner, turns, isDraw, new HashMap<>(), new HashMap<>(), "");
+        SimpleGameResult(String winner, int rounds, boolean isDraw) {
+            this(winner, rounds, isDraw, new HashMap<>(), new HashMap<>(), "");
         }
 
-        SimpleGameResult(String winner, int turns, boolean isDraw, Map<String, Integer> opponentPlacements) {
-            this(winner, turns, isDraw, opponentPlacements, new HashMap<>(), "");
+        SimpleGameResult(String winner, int rounds, boolean isDraw, Map<String, Integer> opponentPlacements) {
+            this(winner, rounds, isDraw, opponentPlacements, new HashMap<>(), "");
         }
 
-        SimpleGameResult(String winner, int turns, boolean isDraw, Map<String, Integer> opponentPlacements,
+        SimpleGameResult(String winner, int rounds, boolean isDraw, Map<String, Integer> opponentPlacements,
                          Map<String, String> lossReasons, String allPlacementsStr) {
             this.winner = winner;
-            this.turns = turns;
+            this.rounds = rounds;
             this.isDraw = isDraw;
             this.opponentPlacements = opponentPlacements;
             this.lossReasons = lossReasons;
@@ -889,12 +901,12 @@ public class DeckTester {
      * Parse game result from worker process output.
      */
     private SimpleGameResult parseGameResult(String output) {
-        // Look for result line: "RESULT:winner=Input Deck,turns=15,draw=false,placements=..."
+        // Look for result line: "RESULT:winner=Input Deck,rounds=15,draw=false,placements=..."
         for (String line : output.split("\n")) {
             if (line.startsWith("RESULT:")) {
                 String[] parts = line.substring(7).split(",");
                 String winner = null;
-                int turns = 0;
+                int rounds = 0;
                 boolean isDraw = false;
                 Map<String, Integer> opponentPlacements = new HashMap<>();
                 Map<String, String> lossReasons = new HashMap<>();
@@ -907,8 +919,9 @@ public class DeckTester {
                             case "winner":
                                 winner = kv[1].equals("null") ? null : kv[1];
                                 break;
-                            case "turns":
-                                turns = Integer.parseInt(kv[1]);
+                            case "rounds":
+                            case "turns": // backward compatibility
+                                rounds = Integer.parseInt(kv[1]);
                                 break;
                             case "draw":
                                 isDraw = Boolean.parseBoolean(kv[1]);
@@ -940,7 +953,7 @@ public class DeckTester {
                     }
                 }
 
-                return new SimpleGameResult(winner, turns, isDraw, opponentPlacements, lossReasons, allPlacementsStr);
+                return new SimpleGameResult(winner, rounds, isDraw, opponentPlacements, lossReasons, allPlacementsStr);
             }
         }
 
@@ -1258,6 +1271,9 @@ public class DeckTester {
         // Track which players are still active for elimination detection
         Set<String> previousActivePlayers = new HashSet<>(state.playerNames);
 
+        // Track rounds by detecting when active player returns to first player
+        String lastActivePlayer = "";
+
         try {
             String lastPhase = "Starting";
             long phaseStartTime = System.currentTimeMillis();
@@ -1292,13 +1308,26 @@ public class DeckTester {
                     Player activePlayer = game.getPhaseHandler().getPlayerTurn();
                     String activeName = activePlayer != null ? activePlayer.getName() : "";
 
+                    // Track rounds: increment when turn passes to first active player
+                    List<Player> players = new ArrayList<>(game.getPlayers());
+                    if (!activeName.isEmpty() && !activeName.equals(lastActivePlayer)) {
+                        // Turn changed to a different player
+                        if (!players.isEmpty()) {
+                            String firstActivePlayerName = players.get(0).getName();
+                            if (activeName.equals(firstActivePlayerName)) {
+                                // Active player is now the first player - new round started
+                                state.rounds++;
+                            }
+                        }
+                        lastActivePlayer = activeName;
+                    }
+
                     // Update shared state
                     state.turn = currentTurn;
                     state.phase = currentPhase;
                     state.activePlayerName = activeName;
 
                     // Update all player life totals and check if Input Deck is eliminated
-                    List<Player> players = new ArrayList<>(game.getPlayers());
                     Player inputDeckPlayer = null;
 
                     // Track eliminations: check which players are no longer in the active list
@@ -1352,6 +1381,9 @@ public class DeckTester {
                     break;
                 }
             }
+
+            // Save the rounds count from this game
+            lastGameRounds = state.rounds;
         } finally {
             // Remove this game from active games when done
             activeGames.remove(gameId);
