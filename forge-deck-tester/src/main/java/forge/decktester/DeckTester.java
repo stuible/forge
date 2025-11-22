@@ -84,37 +84,45 @@ public class DeckTester {
     private final List<GameRecord> gameRecords = Collections.synchronizedList(new ArrayList<>());
 
     /**
+     * Data about a single player's result in a game.
+     */
+    public static class PlayerResult {
+        public final String name;
+        public final String colors;
+        public final int placement;
+        public final int life;
+        public final String lossReason; // null for winner
+
+        public PlayerResult(String name, String colors, int placement, int life, String lossReason) {
+            this.name = name;
+            this.colors = colors;
+            this.placement = placement;
+            this.life = life;
+            this.lossReason = lossReason;
+        }
+    }
+
+    /**
      * Record of a single game for CSV export.
      */
     public static class GameRecord {
         public final String timestamp;
         public final String testDeck;
-        public final String opponent;
-        public final String opponentColors;
         public final String result; // "WIN", "LOSS", "DRAW", "ERROR"
         public final int turns;
-        public final int placement; // 1 = 1st place, 2 = 2nd, etc.
-        public final int totalPlayers;
-        public final String allPlacements; // "Player1:1:life:reason|Player2:2:life:reason|..." for multiplayer
-        public final String myLossReason; // null if won, e.g., "CommanderDamage", "LifeReachedZero"
+        public final int myPlacement; // 1 = 1st place, 2 = 2nd, etc.
+        public final String myLossReason; // null if won
+        public final List<PlayerResult> opponents; // All opponents with their results
 
-        public GameRecord(String testDeck, String opponent, String opponentColors, String result,
-                          int turns, int placement, int totalPlayers, String allPlacements) {
-            this(testDeck, opponent, opponentColors, result, turns, placement, totalPlayers, allPlacements, null);
-        }
-
-        public GameRecord(String testDeck, String opponent, String opponentColors, String result,
-                          int turns, int placement, int totalPlayers, String allPlacements, String myLossReason) {
+        public GameRecord(String testDeck, String result, int turns, int myPlacement,
+                          String myLossReason, List<PlayerResult> opponents) {
             this.timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
             this.testDeck = testDeck;
-            this.opponent = opponent;
-            this.opponentColors = opponentColors;
             this.result = result;
             this.turns = turns;
-            this.placement = placement;
-            this.totalPlayers = totalPlayers;
-            this.allPlacements = allPlacements;
+            this.myPlacement = myPlacement;
             this.myLossReason = myLossReason;
+            this.opponents = opponents != null ? new ArrayList<>(opponents) : new ArrayList<>();
         }
     }
 
@@ -445,17 +453,17 @@ public class DeckTester {
                             // Record game for CSV export
                             String resultType = gameResult.isDraw ? "DRAW" :
                                 ("Input Deck".equals(gameResult.winner) ? "WIN" : "LOSS");
-                            int placement = "Input Deck".equals(gameResult.winner) ? 1 :
+                            int myPlacement = "Input Deck".equals(gameResult.winner) ? 1 :
                                 (gameResult.isDraw ? 0 : opponents.size() + 1); // Last place if lost
-                            String primaryOppColor = getDeckColorIdentity(oppDeck);
-                            // Use full placements string with loss reasons if available
-                            String allPlacementsStr = gameResult.allPlacementsStr != null && !gameResult.allPlacementsStr.isEmpty()
-                                ? gameResult.allPlacementsStr : buildPlacementsString(gameResult.opponentPlacements);
-                            // Get Input Deck's loss reason if we lost
                             String myLossReason = gameResult.lossReasons.get("Input Deck");
+
+                            // Build opponent results list from placements string
+                            List<PlayerResult> opponentResults = parseOpponentResults(
+                                gameResult.allPlacementsStr, opponents, gameResult.lossReasons);
+
                             gameRecords.add(new GameRecord(
-                                testDeckName, oppDeck.getName(), primaryOppColor, resultType,
-                                gameResult.turns, placement, opponents.size() + 1, allPlacementsStr, myLossReason
+                                testDeckName, resultType, gameResult.turns, myPlacement,
+                                myLossReason, opponentResults
                             ));
                         }
 
@@ -470,10 +478,10 @@ public class DeckTester {
                                 totalGamesPlayed++;
                             }
                         }
-                        // Record error for CSV
+                        // Record error for CSV - include opponent info even for errors
+                        List<PlayerResult> errorOpponents = buildOpponentResultsFromDecks(opponents, "TIMEOUT");
                         gameRecords.add(new GameRecord(
-                            testDeckName, oppDeck.getName(), getDeckColorIdentity(oppDeck), "ERROR",
-                            0, 0, players, "TIMEOUT"
+                            testDeckName, "ERROR", 0, 0, "TIMEOUT", errorOpponents
                         ));
                     } catch (Exception e) {
                         System.err.println("Game vs " + oppDeck.getName() + " error: " + e.getClass().getSimpleName() + ": " + e.getMessage());
@@ -484,12 +492,10 @@ public class DeckTester {
                                 totalGamesPlayed++;
                             }
                         }
-                        // Record error for CSV
-                        boolean isCmd = isCommanderDeck(testDeck) || isCommanderDeck(oppDeck);
-                        int players = isCmd ? commanderOpponents + 1 : 2;
+                        // Record error for CSV - include opponent info even for errors
+                        List<PlayerResult> errorOpponents = buildOpponentResultsFromDecks(opponents, e.getClass().getSimpleName());
                         gameRecords.add(new GameRecord(
-                            testDeckName, oppDeck.getName(), getDeckColorIdentity(oppDeck), "ERROR",
-                            0, 0, players, e.getClass().getSimpleName()
+                            testDeckName, "ERROR", 0, 0, e.getClass().getSimpleName(), errorOpponents
                         ));
                     }
 
@@ -594,6 +600,72 @@ public class DeckTester {
             sb.append(entry.getKey()).append(":").append(entry.getValue());
         }
         return sb.toString();
+    }
+
+    /**
+     * Parse opponent results from allPlacementsStr.
+     * Format: "Player1:placement:life:reason|Player2:placement:life:reason|..."
+     */
+    private List<PlayerResult> parseOpponentResults(String allPlacementsStr, List<Deck> opponents,
+                                                     Map<String, String> lossReasons) {
+        List<PlayerResult> results = new ArrayList<>();
+        if (allPlacementsStr == null || allPlacementsStr.isEmpty()) {
+            // Fallback: create basic results from opponents list
+            return buildOpponentResultsFromDecks(opponents, null);
+        }
+
+        // Parse the placements string
+        String[] parts = allPlacementsStr.split("\\|");
+        for (String part : parts) {
+            String[] fields = part.split(":");
+            if (fields.length >= 3) {
+                String name = fields[0];
+                // Skip "Input Deck" - we only want opponents
+                if ("Input Deck".equals(name)) continue;
+
+                int placement = 0;
+                int life = 0;
+                String reason = null;
+                try {
+                    placement = Integer.parseInt(fields[1]);
+                    life = Integer.parseInt(fields[2]);
+                    if (fields.length >= 4) {
+                        reason = fields[3];
+                        if ("Winner".equals(reason)) reason = null;
+                    }
+                } catch (NumberFormatException e) {
+                    // Keep defaults
+                }
+
+                // Get deck color from opponents list by mapping "Opponent X" to index
+                String colors = "";
+                if (name.startsWith("Opponent ")) {
+                    try {
+                        int oppIndex = Integer.parseInt(name.substring(9)) - 1;
+                        if (oppIndex >= 0 && oppIndex < opponents.size()) {
+                            colors = getDeckColorIdentity(opponents.get(oppIndex));
+                            name = opponents.get(oppIndex).getName(); // Use actual deck name
+                        }
+                    } catch (NumberFormatException e) {
+                        // Keep original name
+                    }
+                }
+
+                results.add(new PlayerResult(name, colors, placement, life, reason));
+            }
+        }
+        return results;
+    }
+
+    /**
+     * Build opponent results from deck list (for error cases where no game was played).
+     */
+    private List<PlayerResult> buildOpponentResultsFromDecks(List<Deck> opponents, String reason) {
+        List<PlayerResult> results = new ArrayList<>();
+        for (Deck opp : opponents) {
+            results.add(new PlayerResult(opp.getName(), getDeckColorIdentity(opp), 0, 0, reason));
+        }
+        return results;
     }
 
     /**

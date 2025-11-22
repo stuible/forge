@@ -703,23 +703,47 @@ public class DeckTesterCLI {
         String filename = ".logs/" + timestamp + "_" + sanitizedName + ".csv";
 
         try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
-            // CSV Header
-            writer.println("Timestamp,TestDeck,Opponent,OpponentColors,Result,MyLossReason,Turns,Placement,TotalPlayers,AllPlacements");
+            // Determine max number of opponents across all games
+            int maxOpponents = 0;
+            for (DeckTester.GameRecord record : records) {
+                maxOpponents = Math.max(maxOpponents, record.opponents.size());
+            }
+
+            // CSV Header - dynamic based on max opponents
+            StringBuilder header = new StringBuilder();
+            header.append("Timestamp,TestDeck,Result,MyPlacement,MyLossReason,Turns");
+            for (int i = 1; i <= maxOpponents; i++) {
+                header.append(",Opp").append(i).append("Name");
+                header.append(",Opp").append(i).append("Colors");
+                header.append(",Opp").append(i).append("Place");
+                header.append(",Opp").append(i).append("LossReason");
+            }
+            writer.println(header);
 
             // Write each game record
             for (DeckTester.GameRecord record : records) {
-                writer.printf("%s,%s,%s,%s,%s,%s,%d,%d,%d,%s%n",
-                    escapeCSV(record.timestamp),
-                    escapeCSV(record.testDeck),
-                    escapeCSV(record.opponent),
-                    escapeCSV(record.opponentColors),
-                    record.result,
-                    record.myLossReason != null ? record.myLossReason : "",
-                    record.turns,
-                    record.placement,
-                    record.totalPlayers,
-                    escapeCSV(record.allPlacements)
-                );
+                StringBuilder row = new StringBuilder();
+                row.append(escapeCSV(record.timestamp)).append(",");
+                row.append(escapeCSV(record.testDeck)).append(",");
+                row.append(record.result).append(",");
+                row.append(record.myPlacement).append(",");
+                row.append(record.myLossReason != null ? record.myLossReason : "").append(",");
+                row.append(record.turns);
+
+                // Add opponent columns
+                for (int i = 0; i < maxOpponents; i++) {
+                    if (i < record.opponents.size()) {
+                        DeckTester.PlayerResult opp = record.opponents.get(i);
+                        row.append(",").append(escapeCSV(opp.name));
+                        row.append(",").append(escapeCSV(opp.colors));
+                        row.append(",").append(opp.placement);
+                        row.append(",").append(opp.lossReason != null ? opp.lossReason : "");
+                    } else {
+                        // Empty columns for missing opponents
+                        row.append(",,,,");
+                    }
+                }
+                writer.println(row);
             }
 
             System.out.println("\nPer-game report saved to: " + filename);
