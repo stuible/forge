@@ -282,6 +282,9 @@ public class DeckTesterCLI {
                         // Restore stdout for printing
                         System.setOut(finalOriginalOut);
                         printResults(partial, finalOptions, duration);
+
+                        // Save per-game CSV report even on early exit
+                        saveGameRecordsCSV(finalTester, partial.deckName);
                     } else {
                         finalOriginalOut.println("No results collected yet.");
                     }
@@ -697,7 +700,7 @@ public class DeckTesterCLI {
             logsDir.mkdirs();
         }
 
-        String filename = ".logs/test_report_" + sanitizedName + "_" + timestamp + ".csv";
+        String filename = ".logs/" + timestamp + "_" + sanitizedName + ".csv";
 
         try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
             // CSV Header
