@@ -333,9 +333,6 @@ public class DeckTester {
         Map<String, MatchupResult> matchupResults = currentMatchupResults;
         for (Deck opponent : opponentDecks) {
             MatchupResult result = new MatchupResult(testDeck.getName(), opponent.getName());
-            // Set number of players for each matchup
-            boolean isCommander = isCommanderDeck(testDeck) || isCommanderDeck(opponent);
-            result.numPlayers = isCommander ? commanderOpponents + 1 : 2;
             // Set color identity for grouping (useful for multiplayer analysis)
             result.opponentColorIdentity = getDeckColorIdentity(opponent);
             matchupResults.put(opponent.getName(), result);
@@ -426,7 +423,7 @@ public class DeckTester {
                                     int totalPlayers = opponents.size() + 1; // opponents + input deck
                                     colorStats.putIfAbsent(color, new ColorWeightedStats());
                                     colorStats.get(color).addWeightedWin(placement, totalPlayers);
-                                    colorStats.get(color).totalTurns += gameResult.rounds;
+                                    colorStats.get(color).totalRounds += gameResult.rounds;
                                 }
                             } else {
                                 result.losses++;
@@ -456,11 +453,11 @@ public class DeckTester {
                                     int totalPlayers = opponents.size() + 1; // opponents + input deck
                                     colorStats.putIfAbsent(color, new ColorWeightedStats());
                                     colorStats.get(color).addWeightedLoss(placement, totalPlayers);
-                                    colorStats.get(color).totalTurns += gameResult.rounds;
+                                    colorStats.get(color).totalRounds += gameResult.rounds;
                                 }
                             }
 
-                            result.totalTurns += gameResult.rounds;
+                            result.totalRounds += gameResult.rounds;
 
                             // Record game for CSV export
                             String resultType = gameResult.isDraw ? "DRAW" :
@@ -1675,8 +1672,7 @@ public class DeckTester {
         public int losses = 0;
         public int draws = 0;
         public int errors = 0;
-        public long totalTurns = 0;
-        public int numPlayers = 2; // Track number of players for round calculation
+        public long totalRounds = 0;
 
         public MatchupResult(String deckName, String opponentName) {
             this.deckName = deckName;
@@ -1692,16 +1688,9 @@ public class DeckTester {
             return total > 0 ? (double) wins / total : 0.0;
         }
 
-        public double getAverageTurns() {
-            int total = getTotalGames();
-            return total > 0 ? (double) totalTurns / total : 0.0;
-        }
-
         public double getAverageRounds() {
             int total = getTotalGames();
-            if (total == 0) return 0.0;
-            double avgTurns = (double) totalTurns / total;
-            return numPlayers > 0 ? avgTurns / numPlayers : avgTurns;
+            return total > 0 ? (double) totalRounds / total : 0.0;
         }
     }
 
@@ -1713,8 +1702,7 @@ public class DeckTester {
         public double weightedWins = 0.0; // Weighted wins (3 for 1st, 2 for 2nd, 1 for 3rd)
         public double weightedLosses = 0.0; // Weighted losses (3 for 1st, 2 for 2nd, 1 for 3rd)
         public int totalGames = 0; // Total games where this color was faced
-        public long totalTurns = 0;
-        public int numPlayers = 2; // Track number of players for round calculation
+        public long totalRounds = 0;
 
         public void addWeightedWin(int opponentPlacement, int totalPlayers) {
             // When we WIN against an opponent:
@@ -1723,7 +1711,6 @@ public class DeckTester {
             double weight = totalPlayers - 1;
             weightedLosses += weight; // Track YOUR wins
             totalGames++;
-            this.numPlayers = totalPlayers; // Track player count for round calculation
         }
 
         public void addWeightedLoss(int opponentPlacement, int totalPlayers) {
@@ -1733,7 +1720,6 @@ public class DeckTester {
             double weight = calculateWeight(opponentPlacement, totalPlayers);
             weightedWins += weight; // Track YOUR losses (opponent's wins)
             totalGames++;
-            this.numPlayers = totalPlayers; // Track player count for round calculation
         }
 
         private double calculateWeight(int placement, int totalPlayers) {
@@ -1752,8 +1738,7 @@ public class DeckTester {
 
         public double getAverageRounds() {
             if (totalGames == 0) return 0.0;
-            double avgTurns = (double) totalTurns / totalGames;
-            return numPlayers > 0 ? avgTurns / numPlayers : avgTurns;
+            return (double) totalRounds / totalGames;
         }
     }
 

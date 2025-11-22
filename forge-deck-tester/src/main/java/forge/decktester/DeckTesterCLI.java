@@ -504,9 +504,8 @@ public class DeckTesterCLI {
                 .orElse(0.0);
         System.out.printf("Avg Game Length:    %.1f rounds%n%n", avgRounds);
 
-        // Check if this is multiplayer Commander (3+ players)
-        boolean isMultiplayerCommander = results.matchups.values().stream()
-                .anyMatch(m -> m.numPlayers >= 3);
+        // Check if this is multiplayer Commander (colorStats populated only in multiplayer)
+        boolean isMultiplayerCommander = !results.colorStats.isEmpty();
 
         if (isMultiplayerCommander) {
             // For multiplayer, group results by color identity
@@ -674,7 +673,7 @@ public class DeckTesterCLI {
                         matchup.losses,
                         matchup.draws,
                         matchup.getWinRate(),
-                        matchup.getAverageTurns());
+                        matchup.getAverageRounds());
             }
         }
 
