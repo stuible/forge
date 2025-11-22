@@ -753,13 +753,21 @@ public class DeckTesterCLI {
 
     /**
      * Escape a string for CSV (quote if contains comma, quote, or newline).
+     * Also removes special characters like apostrophes and HTML entities.
      */
     private static String escapeCSV(String value) {
         if (value == null) return "";
-        if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
-            return "\"" + value.replace("\"", "\"\"") + "\"";
+        // Remove special characters: apostrophes, quotes, and HTML entities
+        String cleaned = value
+            .replace("'", "")
+            .replace("'", "")
+            .replace("\"", "")
+            .replace("`", "")
+            .replaceAll("&#?\\w+;", ""); // Remove HTML entities like &#39;
+        if (cleaned.contains(",") || cleaned.contains("\n")) {
+            return "\"" + cleaned + "\"";
         }
-        return value;
+        return cleaned;
     }
 
     /**
