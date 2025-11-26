@@ -365,8 +365,10 @@ public class DeckTester {
 
                         if (isCmd && commanderOpponents > 1) {
                             // Need more opponents - pick from pool, allowing reuse if needed
+                            // Use deterministic shuffling based on primary opponent name and game number
                             List<Deck> availableOpponents = new ArrayList<>(opponentDecks);
-                            Collections.shuffle(availableOpponents);
+                            long seed = oppDeck.getName().hashCode() + gameNum;
+                            Collections.shuffle(availableOpponents, new java.util.Random(seed));
 
                             for (int i = 1; i < commanderOpponents; i++) {
                                 // Cycle through available decks, reusing if necessary
@@ -1032,9 +1034,13 @@ public class DeckTester {
             players.add(rp);
         }
 
-        // Randomize player order for turn order
+        // Randomize player order for turn order (deterministically based on deck names)
         List<RegisteredPlayer> randomizedPlayers = new ArrayList<>(players);
-        Collections.shuffle(randomizedPlayers);
+        long seed = inputDeck.getName().hashCode();
+        for (Deck opp : opponentDecks) {
+            seed += opp.getName().hashCode();
+        }
+        Collections.shuffle(randomizedPlayers, new java.util.Random(seed));
 
         // Set up game rules
         GameType gameType = isCommander ? GameType.Commander : GameType.Constructed;
@@ -1128,9 +1134,10 @@ public class DeckTester {
             }
         }
 
-        // Randomize player order for turn order (but keep track of original)
+        // Randomize player order for turn order (deterministically based on deck names)
         List<RegisteredPlayer> randomizedPlayers = new ArrayList<>(players);
-        Collections.shuffle(randomizedPlayers);
+        long seed = deck1.getName().hashCode() + deck2.getName().hashCode();
+        Collections.shuffle(randomizedPlayers, new java.util.Random(seed));
 
         // Set up appropriate game rules
         GameType gameType = isCommander ? GameType.Commander : GameType.Constructed;
