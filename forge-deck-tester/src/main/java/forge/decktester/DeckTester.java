@@ -350,6 +350,7 @@ public class DeckTester {
         for (Deck opponent : opponentDecks) {
             for (int gameNum = 0; gameNum < gamesPerMatchup; gameNum++) {
                 final Deck oppDeck = opponent;
+                final int finalGameNum = gameNum;
 
                 Future<Void> future = executor.submit(() -> {
                     if (cancelled) return null;
@@ -368,7 +369,7 @@ public class DeckTester {
                             // Need more opponents - pick from pool, allowing reuse if needed
                             // Use deterministic shuffling based on primary opponent name and game number
                             List<Deck> availableOpponents = new ArrayList<>(opponentDecks);
-                            long seed = oppDeck.getName().hashCode() + gameNum;
+                            long seed = oppDeck.getName().hashCode() + finalGameNum;
                             Collections.shuffle(availableOpponents, new java.util.Random(seed));
 
                             for (int i = 1; i < commanderOpponents; i++) {
