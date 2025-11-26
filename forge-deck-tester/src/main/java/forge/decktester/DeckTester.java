@@ -31,6 +31,7 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
@@ -1064,18 +1065,37 @@ public class DeckTester {
                 return null;
             });
 
-            Thread monitorThread = new Thread(() -> monitorGameProgress(game, inputDeck.getName(), "Multiplayer", isCommander));
+            // Monitor in a separate thread that can detect phase timeouts
+            AtomicReference<TimeoutException> monitorTimeout = new AtomicReference<>();
+            Thread monitorThread = new Thread(() -> {
+                try {
+                    monitorGameProgress(game, inputDeck.getName(), "Multiplayer", isCommander);
+                } catch (TimeoutException e) {
+                    monitorTimeout.set(e);
+                    // Force game to end
+                    gameFuture.cancel(true);
+                    gameExecutor.shutdownNow();
+                }
+            });
             monitorThread.setDaemon(true);
             monitorThread.start();
 
             try {
                 gameFuture.get(gameTimeoutSeconds, TimeUnit.SECONDS);
+                // Check if monitor detected a timeout
+                if (monitorTimeout.get() != null) {
+                    throw monitorTimeout.get();
+                }
             } catch (TimeoutException e) {
                 System.err.println("\nGame timed out - forcing end");
                 gameFuture.cancel(true);
                 gameExecutor.shutdownNow();
                 throw e;
             } catch (Exception e) {
+                // Check if it was a monitor timeout
+                if (monitorTimeout.get() != null) {
+                    throw monitorTimeout.get();
+                }
                 System.err.println("\nGame interrupted: " + e.getMessage());
                 throw new RuntimeException("Game interrupted", e);
             } finally {
@@ -1164,14 +1184,28 @@ public class DeckTester {
                 return null;
             });
 
-            // Monitor game progress in real-time (in a separate thread)
-            Thread monitorThread = new Thread(() -> monitorGameProgress(game, deck1.getName(), deck2.getName(), isCommander));
+            // Monitor in a separate thread that can detect phase timeouts
+            AtomicReference<TimeoutException> monitorTimeout = new AtomicReference<>();
+            Thread monitorThread = new Thread(() -> {
+                try {
+                    monitorGameProgress(game, deck1.getName(), deck2.getName(), isCommander);
+                } catch (TimeoutException e) {
+                    monitorTimeout.set(e);
+                    // Force game to end
+                    gameFuture.cancel(true);
+                    gameExecutor.shutdownNow();
+                }
+            });
             monitorThread.setDaemon(true);
             monitorThread.start();
 
             // Wait for game to complete with timeout
             try {
                 gameFuture.get(gameTimeoutSeconds, TimeUnit.SECONDS);
+                // Check if monitor detected a timeout
+                if (monitorTimeout.get() != null) {
+                    throw monitorTimeout.get();
+                }
             } catch (TimeoutException e) {
                 // Timeout - force end the game
                 System.err.println("\nGame timed out - forcing end");
@@ -1179,6 +1213,10 @@ public class DeckTester {
                 gameExecutor.shutdownNow();
                 throw e; // Re-throw to mark as error
             } catch (Exception e) {
+                // Check if it was a monitor timeout
+                if (monitorTimeout.get() != null) {
+                    throw monitorTimeout.get();
+                }
                 System.err.println("\nGame interrupted: " + e.getMessage());
                 throw new RuntimeException("Game interrupted", e);
             } finally {
@@ -1248,7 +1286,7 @@ public class DeckTester {
     /**
      * Monitor game progress and update shared state for unified display.
      */
-    private void monitorGameProgress(Game game, String deck1Name, String deck2Name, boolean isCommander) {
+    private void monitorGameProgress(Game game, String deck1Name, String deck2Name, boolean isCommander) throws TimeoutException {
         String gameId = Thread.currentThread().getName();
         GameState state = new GameState();
         state.opponentName = deck2Name;
